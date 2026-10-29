@@ -14,12 +14,49 @@ from io import BytesIO
 from django.http import HttpResponse
 from .models import (
     Material, Personal, CierreAnual, DetalleCierreAnual,
-    ActaEntrada, CartaRetiro, CartaDevolucion, DetalleActa, DetalleRetiro, MovimientoKardex, DetalleDevolucion, 
+    ActaEntrada, CartaRetiro, CartaDevolucion, DetalleActa, DetalleRetiro, MovimientoKardex, DetalleDevolucion, Usuario,
+    SolicitudLiberacion, HistorialLiberaciones
 )
 from .serializers import (
     CierreAnualSerializer, MaterialSerializer, PersonalSerializer,
-    ActaEntradaSerializer, CartaRetiroSerializer, CartaDevolucionSerializer, MaterialKardexDetailSerializer
+    ActaEntradaSerializer, CartaRetiroSerializer, CartaDevolucionSerializer, MaterialKardexDetailSerializer, UsuarioSerializer,
+    SolicitudLiberacionSerializer, HistorialLiberacionesSerializer
 )
+from django.utils import timezone
+
+class UsuarioViewSet(viewsets.ModelViewSet):
+    queryset = Usuario.objects.all()
+    serializer_class = UsuarioSerializer
+    
+    @action(detail=False, methods=['post'])
+    def login(self, request):
+        email = request.data.get('email')
+        password = request.data.get('password')
+        
+        if not email or not password:
+            return Response({'error': 'Email y contraseña son requeridos'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            usuario = Usuario.objects.get(email=email, password=password)
+            serializer = self.get_serializer(usuario)
+            data = serializer.data
+            data.pop('password', None)
+            return Response(data, status=status.HTTP_200_OK)
+        except Usuario.DoesNotExist:
+            return Response({'error': 'Credenciales incorrectas'}, 
+                          status=status.HTTP_401_UNAUTHORIZED)
+    
+    @action(detail=False, methods=['post'])
+    def register(self, request):
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            usuario = serializer.save()
+            data = serializer.data
+            data.pop('password', None)
+            return Response(data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 
 
@@ -33,16 +70,30 @@ class MaterialViewSet(viewsets.ModelViewSet):
         # Guarda el nuevo material (el método save asignará el pag_kardex automático)
         material = serializer.save()
 
-        # Si ingresa con stock inicial superior a 0, creamos el movimiento inicial
-        if material.stock_actual > 0:
+        # Si ingresa con stock inicial superior a 0, creamos los movimientos iniciales
+        # por cada destino para mantener el Kardex consistente con el desglose.
+        if material.stock_mantenimiento > 0:
             MovimientoKardex.objects.create(
                 material=material,
                 numero_documento="INVENTARIO INICIAL",
                 tipo_movimiento="ENTRADA",
-                cantidad_entrada=material.stock_actual,
+                destino="M",
+                cantidad_entrada=material.stock_mantenimiento,
+                cantidad_salida=0,
+                existencias=material.stock_mantenimiento,
+                observaciones="Registro inicial de material (Mantenimiento) en el sistema"
+            )
+
+        if material.stock_obra > 0:
+            MovimientoKardex.objects.create(
+                material=material,
+                numero_documento="INVENTARIO INICIAL",
+                tipo_movimiento="ENTRADA",
+                destino="O",
+                cantidad_entrada=material.stock_obra,
                 cantidad_salida=0,
                 existencias=material.stock_actual,
-                observaciones="Registro inicial de material en el sistema"
+                observaciones="Registro inicial de material (Obra) en el sistema"
             )
 
     def destroy(self, request, *args, **kwargs):
@@ -67,44 +118,52 @@ class PersonalViewSet(viewsets.ModelViewSet):
 class ActaEntradaViewSet(viewsets.ModelViewSet):
     queryset = ActaEntrada.objects.all()
     serializer_class = ActaEntradaSerializer
+
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         detalles_data = request.data.get('detalles', [])
 
-        # 1. Guardar la cabecera del Acta de Entrada
+        if not detalles_data:
+            raise ValidationError({'error': 'Debe incluir al menos un material en el acta.'})
+
+        # 1. Guardar cabecera y detalles AUTOMÁTICAMENTE a través del serializador (Una sola vez)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         acta = serializer.save()
 
-        # 2. Registrar detalles e incrementar stock de cada material
+        # 2. Únicamente incrementar stock y registrar el movimiento en el Kardex por cada material
         for item in detalles_data:
-            codigo_mat = item.get('material')
-            cant = float(item.get('cantidad', 0))
+            mat_id = item.get('material')
+            cant = Decimal(str(item.get('cantidad', 0)))
+            destino = item.get('destino', 'M') or 'M'
+            if destino not in ('M', 'O'):
+                destino = 'M'
 
             try:
-                material = Material.objects.select_for_update().get(codigo=codigo_mat)
+                material = Material.objects.select_for_update().get(pk=mat_id)
             except Material.DoesNotExist:
-                raise ValidationError({'error': f'El material con código "{codigo_mat}" no existe.'})
+                raise ValidationError({'error': f'El material con identificador "{mat_id}" no existe.'})
 
-            material.stock_actual += Decimal(str(cant))
+            if destino == 'O':
+                material.stock_obra += cant
+            else:
+                material.stock_mantenimiento += cant
+            material.stock_actual = material.stock_mantenimiento + material.stock_obra
             material.save()
-            DetalleActa.objects.create(
-                acta=acta,
-                material=material,
-                cantidad=cant
-            )
 
-            # 3. Registrar Movimiento en Kardex
+            observacion_detalle = item.get('observacion') or item.get('observaciones') or ''
+
+            # Registrar Movimiento en Kardex
             MovimientoKardex.objects.create(
                 material=material,
-                numero_documento=f"ACTA-{acta.numero_acta}",
+                numero_documento=acta.numero_acta,
                 fecha=acta.fecha_recepcion,
                 tipo_movimiento='ENTRADA',
-                destino='M',
+                destino=destino,
                 cantidad_entrada=cant,
                 cantidad_salida=0,
                 existencias=material.stock_actual,
-                observaciones=acta.observaciones or "Ingreso por Acta de Entrada"
+                observaciones=observacion_detalle or acta.observaciones or "Ingreso por Acta de Entrada"
             )
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -119,32 +178,83 @@ class CartaRetiroViewSet(viewsets.ModelViewSet):
         if not detalles_data:
             raise ValidationError({'error': 'Debe incluir al menos un material en el retiro.'})
 
-        # 1. Validar disponibilidad de stock antes de procesar
-        materiales_a_descontar = []
+        solicitante_id = request.data.get('usuario_id') or request.data.get('solicitado_por_id')
+        solicitante_nombre = (
+            request.data.get('usuario_nombre')
+            or request.data.get('solicitado_por_nombre')
+            or ''
+        )
+
+        # 1. Validar disponibilidad de stock según el origen (Mantenimiento u Obra).
+        # Se acumula por (material, origen) para que varias líneas del mismo material
+        # no puedan superar el stock disponible de forma individual.
+        materiales_procesar = []
+        totales_por_material = {}
         for item in detalles_data:
             codigo_mat = item.get('material')
-            cant = float(item.get('cantidad_despachada', item.get('cantidad', 0)))
+            cant = Decimal(str(item.get('cantidad_despachada', item.get('cantidad', 0))))
+            origen = item.get('origen', 'M') or 'M'
+            if origen not in ('M', 'O'):
+                origen = 'M'
 
             try:
                 material = Material.objects.select_for_update().get(codigo=codigo_mat)
             except Material.DoesNotExist:
                 raise ValidationError({'error': f'El material con código "{codigo_mat}" no existe.'})
 
-            if material.stock_actual < cant:
-                raise ValidationError({
-                    'error': f'Stock insuficiente para {material.nombre}. Disponible: {material.stock_actual}, Solicitado: {cant}'
-                })
+            clave = (material.pk, origen)
+            totales_por_material[clave] = totales_por_material.get(clave, 0) + cant
+            materiales_procesar.append((material, cant, item, origen))
 
-            materiales_a_descontar.append((material, cant, item))
+        for (material_pk, origen), cantidad_total in totales_por_material.items():
+            material = Material.objects.get(pk=material_pk)
+            disponible = (
+                material.stock_mantenimiento
+                if origen == 'M'
+                else material.stock_obra
+            )
+            if disponible < cantidad_total:
+                etiqueta = 'Mantenimiento' if origen == 'M' else 'Obra'
+                raise ValidationError({
+                    'error': (
+                        f'Stock de {etiqueta} insuficiente para {material.nombre}. '
+                        f'Disponible: {disponible}, Solicitado: {cantidad_total}'
+                    )
+                })
 
         # 2. Guardar la cabecera y los detalles AUTOMÁTICAMENTE mediante el Serializador
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         carta = serializer.save()
 
-        # 3. Únicamente descontar stock y registrar el movimiento en el Kardex (SIN volver a crear DetalleRetiro)
-        for material, cant, item in materiales_a_descontar:
-            material.stock_actual -= Decimal(str(cant))
+        solicitudes_creadas = 0
+
+        # 3. Descontar Mantenimiento de inmediato; Obra queda pendiente de aprobación
+        for material, cant, item, origen in materiales_procesar:
+            if origen == 'O':
+                SolicitudLiberacion.objects.create(
+                    material=material,
+                    cantidad=cant,
+                    carta_retiro=carta,
+                    proyecto_origen=(
+                        item.get('observacion')
+                        or carta.observaciones
+                        or carta.destino_circuito
+                        or ''
+                    ),
+                    motivo=(
+                        item.get('observacion')
+                        or carta.observaciones
+                        or 'Solicitud de liberación de material de obra'
+                    ),
+                    solicitado_por_id=solicitante_id or None,
+                    solicitado_por_nombre=solicitante_nombre,
+                )
+                solicitudes_creadas += 1
+                continue
+
+            material.stock_mantenimiento -= cant
+            material.stock_actual = material.stock_mantenimiento + material.stock_obra
             material.save()
 
             MovimientoKardex.objects.create(
@@ -159,8 +269,148 @@ class CartaRetiroViewSet(viewsets.ModelViewSet):
                 observaciones=carta.observaciones or "Salida por Carta de Retiro"
             )
 
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        data = serializer.data
+        data['solicitudes_creadas'] = solicitudes_creadas
+        return Response(data, status=status.HTTP_201_CREATED)
 
+
+
+class SolicitudLiberacionViewSet(viewsets.ModelViewSet):
+    queryset = SolicitudLiberacion.objects.all().select_related('material', 'carta_retiro')
+    serializer_class = SolicitudLiberacionSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        estado = self.request.query_params.get('estado')
+        if estado:
+            queryset = queryset.filter(estado=estado.upper())
+        material = self.request.query_params.get('material')
+        if material:
+            queryset = queryset.filter(material_id=material)
+        return queryset
+
+    def _obtener_administrador(self, request):
+        admin_id = (
+            request.data.get('administrador_id')
+            or request.data.get('usuario_id')
+            or request.data.get('aprobado_por_id')
+        )
+        if not admin_id:
+            raise ValidationError({
+                'error': 'Solo un usuario administrador puede autorizar liberaciones.'
+            })
+
+        admin = Usuario.objects.filter(pk=admin_id, rol='admin').first()
+        if not admin:
+            raise ValidationError({
+                'error': 'El usuario no existe o no posee rol de administrador.'
+            })
+
+        nombre = f"{admin.nombres} {admin.apellidos}".strip()
+        return admin, nombre
+
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
+    def aprobar(self, request, pk=None):
+        admin, admin_nombre = self._obtener_administrador(request)
+
+        try:
+            solicitud = SolicitudLiberacion.objects.select_for_update().get(pk=pk)
+        except SolicitudLiberacion.DoesNotExist:
+            return Response({'error': 'Solicitud no encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if solicitud.estado != 'PENDIENTE':
+            return Response(
+                {'error': f'La solicitud ya fue {solicitud.estado.lower()} y no puede aprobarse de nuevo.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        material = Material.objects.select_for_update().get(pk=solicitud.material_id)
+        cantidad = solicitud.cantidad
+
+        if material.stock_obra < cantidad:
+            return Response(
+                {'error': (
+                    f'Stock de Obra insuficiente para {material.nombre}. '
+                    f'Disponible: {material.stock_obra}, Solicitado: {cantidad}'
+                )},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        motivo = request.data.get('motivo') or solicitud.motivo or 'Liberación de material de obra'
+
+        material.stock_obra -= cantidad
+        material.stock_actual = material.stock_mantenimiento + material.stock_obra
+        material.save()
+
+        numero_documento = (
+            f"RD-{solicitud.carta_retiro.codigo_retiro}"
+            if solicitud.carta_retiro
+            else f"LIB-{solicitud.id:05d}"
+        )
+
+        MovimientoKardex.objects.create(
+            material=material,
+            numero_documento=numero_documento,
+            fecha=timezone.now().date(),
+            tipo_movimiento='SALIDA',
+            destino='O',
+            cantidad_entrada=0,
+            cantidad_salida=cantidad,
+            existencias=material.stock_actual,
+            observaciones=motivo,
+        )
+
+        HistorialLiberaciones.objects.create(
+            material=material,
+            cantidad=cantidad,
+            proyecto_origen=solicitud.proyecto_origen or motivo,
+            administrador_id=admin.pk,
+            administrador_nombre=admin_nombre,
+            motivo=motivo,
+            numero_documento=numero_documento,
+            solicitud=solicitud,
+        )
+
+        solicitud.estado = 'APROBADA'
+        solicitud.aprobado_por_id = admin.pk
+        solicitud.aprobado_por_nombre = admin_nombre
+        solicitud.fecha_resolucion = timezone.now()
+        solicitud.save()
+
+        return Response(SolicitudLiberacionSerializer(solicitud).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
+    def rechazar(self, request, pk=None):
+        admin, admin_nombre = self._obtener_administrador(request)
+
+        try:
+            solicitud = SolicitudLiberacion.objects.select_for_update().get(pk=pk)
+        except SolicitudLiberacion.DoesNotExist:
+            return Response({'error': 'Solicitud no encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if solicitud.estado != 'PENDIENTE':
+            return Response(
+                {'error': f'La solicitud ya fue {solicitud.estado.lower()} y no puede rechazarse de nuevo.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        solicitud.estado = 'RECHAZADA'
+        solicitud.aprobado_por_id = admin.pk
+        solicitud.aprobado_por_nombre = admin_nombre
+        solicitud.motivo = request.data.get('motivo') or solicitud.motivo
+        solicitud.fecha_resolucion = timezone.now()
+        solicitud.save()
+
+        return Response(SolicitudLiberacionSerializer(solicitud).data, status=status.HTTP_200_OK)
+
+
+class HistorialLiberacionesViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = HistorialLiberaciones.objects.all().select_related('material')
+    serializer_class = HistorialLiberacionesSerializer
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['material__codigo', 'material__nombre', 'proyecto_origen', 'administrador_nombre']
 
 
 class CartaDevolucionViewSet(viewsets.ModelViewSet):
@@ -173,67 +423,30 @@ class CierreAnualViewSet(viewsets.ModelViewSet):
     queryset = CierreAnual.objects.all().order_by('-fecha_inicio')
     serializer_class = CierreAnualSerializer
 
-    @transaction.atomic
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        fecha_inicio = serializer.validated_data.get('fecha_inicio')
-        fecha_cierre = serializer.validated_data.get('fecha_cierre')
-        observaciones = serializer.validated_data.get('observaciones', '')
+    @action(detail=False, methods=['get'], url_path='historial-filtrado')
+    def historial_filtrado(self, request):
+        # Capturamos los parámetros de fecha de la URL (ej: ?fecha_inicio=2026-10-01&fecha_fin=2026-10-23)
+        fecha_inicio = request.GET.get('fecha_inicio')
+        fecha_fin = request.GET.get('fecha_fin')
 
-        anio_int = fecha_inicio.year
+        actas = ActaEntrada.objects.all()
+        retiros = CartaRetiro.objects.all()
+        devoluciones = CartaDevolucion.objects.all()
 
-        if not (2023 <= anio_int <= 2100):
-            return Response(
-                {"error": "El año ingresado no es valido. Debe estar entre 2023 y 2100."}, status=status.HTTP_400_BAD_REQUEST
-            )
+        if fecha_inicio and fecha_fin:
+            actas = actas.filter(fecha_recepcion__range=[fecha_inicio, fecha_fin])
+            retiros = retiros.filter(fecha_hora__date__range=[fecha_inicio, fecha_fin])
+            devoluciones = devoluciones.filter(fecha_hora__date__range=[fecha_inicio, fecha_fin])
+        elif fecha_inicio:
+            actas = actas.filter(fecha_recepcion__gte=fecha_inicio)
+            retiros = retiros.filter(fecha_hora__date__gte=fecha_inicio)
+            devoluciones = devoluciones.filter(fecha_hora__date__gte=fecha_inicio)
 
-        if CierreAnual.objects.filter(fecha_inicio__year=anio_int).exists():
-            return Response(
-                {"error": f"Ya se realizo el cierre de inventario para el año {anio_int}."}, status=status.HTTP_400_BAD_REQUEST
-            )
-
-        
-
-        if not anio_int:
-            return Response(
-                {"error": "El campo 'año' es obligatorio."}, status=status.HTTP_400_BAD_REQUEST
-            )
-        try:
-            anio_int = int(fecha_inicio.year)
-            if not (2023 <= anio_int <= 2100):
-                return Response(
-                    {"error": "El año ingresado no es valido. Debe estar entre 2023 y 2100."}, status=status.HTTP_400_BAD_REQUEST
-                )
-        except (AttributeError, ValueError, TypeError):
-            return Response(
-                {"error": "El año ingresado no es valido."}, status=status.HTTP_400_BAD_REQUEST
-            )
-        if CierreAnual.objects.filter(fecha_inicio__year=anio_int).exists():
-            return Response(
-                {"error": f"Ya se realizo el cierre de inventario para el año {anio_int}."}, status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        
-        cierre = CierreAnual.objects.create(
-            fecha_inicio=fecha_inicio,
-            fecha_cierre=fecha_cierre,
-            observaciones=observaciones)
-        
-        materiales = Material.objects.all()
-        detalles = [
-            DetalleCierreAnual(
-                cierre=cierre,
-                material=mat,
-                stock_final=mat.stock_actual
-            ) 
-            for mat in materiales
-        ] 
-        DetalleCierreAnual.objects.bulk_create(detalles)
-
-        response_serializer = self.get_serializer(cierre)
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+        return Response({
+            "actas_entrada": ActaEntradaSerializer(actas, many=True).data,
+            "cartas_retiro": CartaRetiroSerializer(retiros, many=True).data,
+            "cartas_devolucion": CartaDevolucionSerializer(devoluciones, many=True).data,
+        })
 
 
 @api_view(['POST'])
@@ -414,10 +627,15 @@ def registrar_ingreso_acta(numero_acta, fecha_ingreso, items_materiales, observa
     """
     for item in items_materiales:
         material = Material.objects.select_for_update().get(id=item['material_id'])
-        
-        # Calcular nuevo saldo de existencias
-        nueva_existencia = material.stock_actual + item['cantidad']
-        material.stock_actual = nueva_existencia
+        destino = item.get('destino', 'M') or 'M'
+
+        if destino == 'O':
+            material.stock_obra += item['cantidad']
+        else:
+            material.stock_mantenimiento += item['cantidad']
+
+        material.stock_actual = material.stock_mantenimiento + material.stock_obra
+        nueva_existencia = material.stock_actual
         material.save()
 
         # Generar fila automática en el Kardex del material
@@ -426,7 +644,7 @@ def registrar_ingreso_acta(numero_acta, fecha_ingreso, items_materiales, observa
             numero_documento=f"ACTA ALMACEN {numero_acta}",
             fecha=fecha_ingreso,
             tipo_movimiento='ENTRADA',
-            destino=item.get('destino', 'M'),
+            destino=destino,
             cantidad_entrada=item['cantidad'],
             cantidad_salida=0,
             existencias=nueva_existencia,
@@ -441,13 +659,22 @@ def registrar_salida_carta_rd(numero_carta_rd, fecha_salida, items_materiales, o
     """
     for item in items_materiales:
         material = Material.objects.select_for_update().get(id=item['material_id'])
-        
-        if material.stock_actual < item['cantidad']:
-            raise ValueError(f"Stock insuficiente para {material.descripcion}")
+        destino = item.get('destino', 'M') or 'M'
 
-        # Descontar stock
-        nueva_existencia = material.stock_actual - item['cantidad']
-        material.stock_actual = nueva_existencia
+        disponible = (
+            material.stock_obra if destino == 'O' else material.stock_mantenimiento
+        )
+        if disponible < item['cantidad']:
+            raise ValueError(f"Stock insuficiente para {material.nombre or material.descripcion}")
+
+        # Descontar stock del destino correspondiente
+        if destino == 'O':
+            material.stock_obra -= item['cantidad']
+        else:
+            material.stock_mantenimiento -= item['cantidad']
+
+        material.stock_actual = material.stock_mantenimiento + material.stock_obra
+        nueva_existencia = material.stock_actual
         material.save()
 
         # Generar fila de salida automática
@@ -456,7 +683,7 @@ def registrar_salida_carta_rd(numero_carta_rd, fecha_salida, items_materiales, o
             numero_documento=f"RD-{numero_carta_rd}",
             fecha=fecha_salida,
             tipo_movimiento='SALIDA',
-            destino=item.get('destino', 'M'),
+            destino=destino,
             cantidad_entrada=0,
             cantidad_salida=item['cantidad'],
             existencias=nueva_existencia,

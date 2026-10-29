@@ -6,17 +6,31 @@ from .validators import (
     validar_personal_duplicado,
     validar_unidad_medida,
     validar_stock,
-    )
+)
 from .models import (
     Material, Personal, CierreAnual, DetalleCierreAnual,
     ActaEntrada, DetalleActa,
     CartaRetiro, DetalleRetiro,
     CartaDevolucion, DetalleDevolucion, 
-    MovimientoKardex
+    MovimientoKardex, Usuario,
+    SolicitudLiberacion, HistorialLiberaciones
 )
 
-class MovimientoKardexSerializer(serializers.ModelSerializer):
+class UsuarioSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Usuario
+        fields = ['id', 'cedula', 'nombres', 'apellidos', 
+                  'fecha_nacimiento', 'cargo', 'email', 'password', 'rol', 'fecha_registro']
+        extra_kwargs = {
+            'password': {'write_only': True},
+            'fecha_registro': {'read_only': True}
+        }
     
+    def create(self, validated_data):
+        return Usuario.objects.create(**validated_data)
+
+
+class MovimientoKardexSerializer(serializers.ModelSerializer):
     class Meta:
         model = MovimientoKardex
         fields = [
@@ -28,35 +42,88 @@ class MovimientoKardexSerializer(serializers.ModelSerializer):
 class MaterialKardexDetailSerializer(serializers.ModelSerializer):
     historial_kardex = MovimientoKardexSerializer(many=True, read_only=True)
     pag_formateado = serializers.SerializerMethodField()
-    nombre_material = serializers.ReadOnlyField(source='nombre')  # <-- Mapea directamente desde el campo 'nombre'
+    nombre_material = serializers.ReadOnlyField(source='nombre')
 
     class Meta:
         model = Material
         fields = [
             'codigo', 'nombre', 'nombre_material', 'descripcion', 'unidad_medida', 
-            'pag_kardex', 'pag_formateado', 'stock_actual',     
+            'pag_kardex', 'pag_formateado', 'stock_actual',
+            'stock_mantenimiento', 'stock_obra', 'stock_total',
             'historial_kardex'
         ]
 
     def get_pag_formateado(self, obj):
         if obj.pag_kardex is not None:
             return f"PAG-{obj.pag_kardex:03d}"
-        return "PAG-001"  # O puedes retornar None o "" si prefieres dejarlo vacío
+        return "PAG-001"
 
 class MaterialSerializer(serializers.ModelSerializer):
     stock_actual = serializers.DecimalField(
-        max_digits=10,
+        max_digits=12,
         decimal_places=2,
+        required=False,
         default=0,
         validators=[validar_stock],
     )
+    stock_mantenimiento = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False,
+        validators=[validar_stock],
+    )
+    stock_obra = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False,
+        validators=[validar_stock],
+    )
+    stock_total = serializers.SerializerMethodField()
 
     class Meta:
         model = Material
-        fields = '__all__'
+        fields = [
+            'codigo', 'nombre', 'descripcion', 'unidad_medida',
+            'stock_actual', 'stock_mantenimiento', 'stock_obra', 'stock_total',
+            'pag_kardex', 'fecha_ingreso',
+        ]
+        read_only_fields = ['pag_kardex']
+
+    def get_stock_total(self, obj):
+        return (obj.stock_mantenimiento or 0) + (obj.stock_obra or 0)
 
     def validate_unidad_medida(self, value):
         return validar_unidad_medida(value)
+
+    def _sincronizar_stock(self, validated_data, instance=None):
+        mantenimiento = validated_data.get(
+            'stock_mantenimiento',
+            getattr(instance, 'stock_mantenimiento', None),
+        )
+        obra = validated_data.get(
+            'stock_obra',
+            getattr(instance, 'stock_obra', None),
+        )
+        total_actual = validated_data.get(
+            'stock_actual',
+            getattr(instance, 'stock_actual', 0),
+        )
+
+        if mantenimiento is None and obra is None:
+            mantenimiento = total_actual or 0
+            obra = 0
+        else:
+            mantenimiento = mantenimiento if mantenimiento is not None else 0
+            obra = obra if obra is not None else 0
+
+        validated_data['stock_mantenimiento'] = mantenimiento
+        validated_data['stock_obra'] = obra
+        validated_data['stock_actual'] = (mantenimiento or 0) + (obra or 0)
+        return validated_data
+
+    def create(self, validated_data):
+        validated_data = self._sincronizar_stock(validated_data)
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data = self._sincronizar_stock(validated_data, instance=instance)
+        return super().update(instance, validated_data)
 
 class PersonalSerializer(serializers.ModelSerializer):
     class Meta:
@@ -71,8 +138,8 @@ class DetalleActaSerializer(serializers.ModelSerializer):
     material = serializers.PrimaryKeyRelatedField(queryset=Material.objects.all())
     codigo_material = serializers.ReadOnlyField(source='material.codigo')
     nombre_material = serializers.ReadOnlyField(source='material.nombre')
-    # Se declara como ReadOnlyField relacionando al modelo Material
     unidad_medida = serializers.ReadOnlyField(source='material.unidad_medida')
+    observacion = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     class Meta:
         model = DetalleActa
@@ -82,16 +149,16 @@ class DetalleActaSerializer(serializers.ModelSerializer):
             'codigo_material',
             'nombre_material',
             'cantidad',
-            'unidad_medida',  # Agregado
+            'unidad_medida',
             'estado',
             'observaciones',
+            'observacion',
+            'destino',
         ]
 
-    def validate_PZA(self, attrs):
+    def validate(self, attrs):
         material = attrs.get('material')
-        cantidad = attrs.get('cantidad')
-
-        #si el material es por Pieza, la cantidad debe ser un número entero
+        cantidad = attrs.get('cantidad', 0)
         if material and material.unidad_medida == 'PZA':
             if cantidad % 1 != 0:
                 raise serializers.ValidationError(
@@ -99,58 +166,97 @@ class DetalleActaSerializer(serializers.ModelSerializer):
                 )
         return attrs
 
+
 class ActaEntradaSerializer(serializers.ModelSerializer):
     origen = serializers.CharField(required=False, allow_blank=True, default='')
-    detalles = DetalleActaSerializer(many=True, required=False)
+    detalles = DetalleActaSerializer(many=True, required=False, source='actas')
+
+    recibido_por_nombre = serializers.SerializerMethodField()
+    entregado_por_nombre = serializers.SerializerMethodField()
+
     class Meta:
         model = ActaEntrada
-        fields = ['id', 'numero_acta', 'ceco', 'fecha_recepcion', 'origen', 'observaciones', 'entregado_por', 'recibido_por', 'detalles']
+        fields = [
+            'id', 'numero_acta', 'ceco', 'fecha_recepcion', 'origen', 
+            'observaciones', 'entregado_por', 'recibido_por', 
+            'recibido_por_nombre', 'entregado_por_nombre', 'detalles'
+        ]
 
-    # 👇 Validación estricta para números entre 1 y 9999
+    def get_recibido_por_nombre(self, obj):
+        if obj.recibido_por:
+            return f"{obj.recibido_por.nombre} {obj.recibido_por.apellido}".strip().title()
+        return "-"
+
+    def get_entregado_por_nombre(self, obj):
+        if obj.entregado_por:
+            return f"{obj.entregado_por.nombre} {obj.entregado_por.apellido}".strip().title()
+        return "-"
+
     def validate_numero_acta(self, value):
         val_str = str(value).strip()
-
         if not val_str.isdigit() or len(val_str) > 4:
             raise serializers.ValidationError(
                 "El número de acta solo debe contener números de 1 a 4 dígitos."
             )
-
         num = int(val_str)
         if num < 1 or num > 9999:
             raise serializers.ValidationError(
                 "El número de acta debe estar comprendido entre 1 y 9999."
             )
-
         return val_str
 
     def validate_detalles(self, value):
-        #valida que la lista de materiales no llegue vacia
-        if not value or len (value) == 0:
-            raise serializers.ValidationError("Debe incluir al menos un material en la carta de retiro.")
+        if not value or len(value) == 0:
+            raise serializers.ValidationError("Debe incluir al menos un material en el acta.")
         return value
     
     def create(self, validated_data):
-        #extrae los detalles del diccionario
-        detalles_data = validated_data.pop('detalles')
-        # genera numero correlativo automatico (ej: ACTA-0001, ACTA-0002, etc.)
+        # 1. Extraemos los detalles limpios que envía el frontend
+        detalles_data = validated_data.pop('actas', [])
+        
+        # 2. Generamos el número de acta automático
         ultimo_id = ActaEntrada.objects.aggregate(Max('id'))['id__max'] or 0
         siguiente_num = f"ACTA-{(ultimo_id + 1):06d}"
+        validated_data['numero_acta'] = siguiente_num
 
-        validated_data['numero_acta']= siguiente_num
-        #crea el registro cabecera
+        # 3. Creamos la cabecera del acta
         acta_entrada = ActaEntrada.objects.create(**validated_data)
-        #asocia y crea los intems en DetalleRetiro
+        
+        # 4. Agrupamos solo duplicados exactos (material + destino + observación),
+        # de forma que un mismo material pueda ingresar parte a Mantenimiento y
+        # parte a Obra en la misma acta.
+        detalles_unicos = {}
         for detalle in detalles_data:
-            DetalleActa.objects.create(acta=acta_entrada, **detalle)
+            mat = detalle.get('material')
+            destino = detalle.get('destino', 'M') or 'M'
+            observacion = detalle.get('observaciones') or detalle.get('observacion') or ''
+            clave = (mat.pk if hasattr(mat, 'pk') else mat, destino, observacion)
+            cant = detalle.get('cantidad', 0)
+            
+            if clave in detalles_unicos:
+                detalles_unicos[clave]['cantidad'] += cant
+            else:
+                detalles_unicos[clave] = {
+                    'acta': acta_entrada,
+                    'material': mat,
+                    'cantidad': cant,
+                    'estado': detalle.get('estado', 'OPERATIVO'),
+                    'observaciones': observacion,
+                    'destino': destino,
+                }
+
+        # Insertamos en la base de datos solo elementos únicos garantizados
+        for datos_detalle in detalles_unicos.values():
+            DetalleActa.objects.create(**datos_detalle)
+            
         return acta_entrada
 
 class DetalleRetiroSerializer(serializers.ModelSerializer):
-    nombre_material = serializers.ReadOnlyField(source='material.nombre')
+    descripcion = serializers.ReadOnlyField(source='material.nombre')
     codigo_material = serializers.ReadOnlyField(source='material.codigo')
-    estado = serializers.ReadOnlyField(source='estado_devolucion.nombre')
-    
-    # 👇 1. Declarar el campo explícitamente aquí
+    nombre_material = serializers.ReadOnlyField(source='material.nombre')
     cantidad_devuelta = serializers.SerializerMethodField()
+    observacion = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     class Meta:
         model = DetalleRetiro
@@ -158,20 +264,29 @@ class DetalleRetiroSerializer(serializers.ModelSerializer):
         read_only_fields = ['carta_retiro']
         extra_kwargs = {
             'cantidad_devuelta': {'required': False, 'allow_null': True},
-            'estado': {'required': False, 'allow_null': True},
-            'observacion_devolucion': {'required': False, 'allow_null': True},
         }
 
     def validate(self, data):
-        cantidad_retirada = data.get('cantidad', getattr(self.instance, 'cantidad', 0))
-        cantidad_devuelta = data.get('cantidad_devuelta', getattr(self.instance, 'cantidad_devuelta', 0))
-        if cantidad_devuelta and cantidad_devuelta > cantidad_retirada:
-            raise serializers.ValidationError({
-                "cantidad_devuelta": "La cantidad devuelta no puede ser mayor a la cantidad retirada."
-            })
+        material = data.get('material', getattr(self.instance, 'material', None))
+        cantidad_solicitada = data.get('cantidad_solicitada', data.get('cantidad', 0))
+        origen = data.get('origen', getattr(self.instance, 'origen', 'M')) or 'M'
+
+        if material:
+            disponible = (
+                material.stock_mantenimiento
+                if origen == 'M'
+                else material.stock_obra
+            )
+            if cantidad_solicitada > disponible:
+                etiqueta = 'Mantenimiento' if origen == 'M' else 'Obra'
+                raise serializers.ValidationError({
+                    "cantidad": (
+                        f"Stock de {etiqueta} insuficiente para {material.nombre}. "
+                        f"Disponible: {disponible}, Solicitado: {cantidad_solicitada}"
+                    )
+                })
         return data
 
-    # 👇 2. El método que calcula el valor para ese SerializerMethodField
     def get_cantidad_devuelta(self, obj):
         if not obj.pk or not obj.carta_retiro_id or not obj.material_id:
             return 0
@@ -180,15 +295,9 @@ class DetalleRetiroSerializer(serializers.ModelSerializer):
             carta_devolucion__carta_retiro=obj.carta_retiro,
             material=obj.material
         ).aggregate(total=models.Sum('cantidad'))['total']
-        
+
         return total or 0
-            
-        total = DetalleDevolucion.objects.filter(
-            carta_devolucion__carta_retiro=obj.carta_retiro,
-            material=obj.material
-        ).aggregate(total=models.Sum('cantidad'))['total']
-        
-        return total or 0
+
 
 class CartaRetiroSerializer(serializers.ModelSerializer):
     codigo_retiro = serializers.ReadOnlyField()
@@ -196,36 +305,104 @@ class CartaRetiroSerializer(serializers.ModelSerializer):
     retirado_por = serializers.SlugRelatedField(slug_field='cedula', queryset=Personal.objects.all())
     detalles = DetalleRetiroSerializer(many=True, source='RD')
 
+    entregado_por_nombre = serializers.SerializerMethodField()
+    retirado_por_nombre = serializers.SerializerMethodField()
+
+    def get_entregado_por_nombre(self, obj):
+        if obj.entregado_por:
+            return f"{obj.entregado_por.nombre} {obj.entregado_por.apellido}".strip().title()
+        return "-"
+
+    def get_retirado_por_nombre(self, obj):
+        if obj.retirado_por:
+            return f"{obj.retirado_por.nombre} {obj.retirado_por.apellido}".strip().title()
+        return "-"
+
+    # Única definición limpia de to_internal_value
     def to_internal_value(self, data):
-            # Copiamos la data enviada por React y descartamos variables visuales
-            data_clean = data.copy() if hasattr(data, 'copy') else dict(data)
-            campos_visuales = ['ceco', 'ceco_codigo', 'ceco_nombre', 'estructura', 'unidad_tecnica']
-            for campo in campos_visuales:
-                data_clean.pop(campo, None)
-            return super().to_internal_value(data_clean)
+        data_clean = data.copy() if hasattr(data, 'copy') else dict(data)
+        campos_visuales = ['ceco', 'ceco_codigo', 'ceco_nombre', 'estructura', 'unidad_tecnica']
+        for campo in campos_visuales:
+            data_clean.pop(campo, None)
+        return super().to_internal_value(data_clean)
     
     class Meta:
         model = CartaRetiro
         fields = '__all__'
 
     def create(self, validated_data):
-        detalles_data = validated_data.pop('RD', validated_data.pop('detalles',[]))
+        detalles_data = validated_data.pop('RD', validated_data.pop('detalles', []))
         carta = CartaRetiro.objects.create(**validated_data)
 
-        #crea automaticamente cada reglon de material asociado a esta carta
         for detalle in detalles_data:
+            detalle.pop('observacion', None)
+            if detalle.get('pag') is None:
+                detalle['pag'] = ''
             DetalleRetiro.objects.create(carta_retiro=carta, **detalle)
 
         return carta
 
+
+class SolicitudLiberacionSerializer(serializers.ModelSerializer):
+    material = serializers.PrimaryKeyRelatedField(queryset=Material.objects.all())
+    material_codigo = serializers.ReadOnlyField(source='material.codigo')
+    material_nombre = serializers.ReadOnlyField(source='material.nombre')
+    unidad_medida = serializers.ReadOnlyField(source='material.unidad_medida')
+    stock_obra_actual = serializers.SerializerMethodField()
+    codigo_retiro = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SolicitudLiberacion
+        fields = '__all__'
+        read_only_fields = [
+            'estado', 'fecha_solicitud', 'fecha_resolucion',
+            'aprobado_por_id', 'aprobado_por_nombre',
+        ]
+
+    def get_stock_obra_actual(self, obj):
+        return obj.material.stock_obra
+
+    def get_codigo_retiro(self, obj):
+        return obj.carta_retiro.codigo_retiro if obj.carta_retiro else ''
+
+
+class HistorialLiberacionesSerializer(serializers.ModelSerializer):
+    material_codigo = serializers.ReadOnlyField(source='material.codigo')
+    material_nombre = serializers.ReadOnlyField(source='material.nombre')
+    unidad_medida = serializers.ReadOnlyField(source='material.unidad_medida')
+
+    class Meta:
+        model = HistorialLiberaciones
+        fields = '__all__'
+
+
 class DetalleDevolucionSerializer(serializers.ModelSerializer):
+    nombre_material = serializers.ReadOnlyField(source='material.nombre')
+    codigo_sap = serializers.ReadOnlyField(source='material.codigo')
+    unidad_medida = serializers.ReadOnlyField(source='material.unidad_medida')
+
     class Meta:
         model = DetalleDevolucion
-        fields = '__all__'
+        fields = '__main__' if hasattr(serializers, '__main__') else '__all__'
         read_only_fields = ['carta_devolucion']
 
+
 class CartaDevolucionSerializer(serializers.ModelSerializer):
+    # Mantenemos DetalleDevolucionSerializer para que acepte datos al crear devoluciones
     detalles = DetalleDevolucionSerializer(many=True)
+    
+    recibido_por_nombre = serializers.SerializerMethodField()
+    devuelto_por_nombre = serializers.SerializerMethodField()
+
+    def get_recibido_por_nombre(self, obj):
+        if hasattr(obj, 'recibido_por') and obj.recibido_por:
+            return f"{obj.recibido_por.nombre} {obj.recibido_por.apellido}".strip().title()
+        return "-"
+
+    def get_devuelto_por_nombre(self, obj):
+        if hasattr(obj, 'devuelto_por') and obj.devuelto_por:
+            return f"{obj.devuelto_por.nombre} {obj.devuelto_por.apellido}".strip().title()
+        return "-"
 
     class Meta:
         model = CartaDevolucion
@@ -235,16 +412,13 @@ class CartaDevolucionSerializer(serializers.ModelSerializer):
         carta_retiro = data.get('carta_retiro')
         detalles_nuevos = data.get('detalles', [])
 
-        # Consultamos todas las devoluciones anteriores hechas a esta misma carta de retiro
         devoluciones_previas = DetalleDevolucion.objects.filter(carta_devolucion__carta_retiro=carta_retiro)
         
-        # Mapeamos cuánto se ha devuelto históricamente por cada material en esta carta
         acumulado_devuelto = {}
         for dev in devoluciones_previas:
             mat_id = dev.material.codigo
             acumulado_devuelto[mat_id] = acumulado_devuelto.get(mat_id, 0) + dev.cantidad
 
-        # Validamos cada ítem que se quiere reingresar
         for detalle in detalles_nuevos:
             material = detalle.get('material')
             cantidad_a_devolver = detalle.get('cantidad', 0)
@@ -252,7 +426,6 @@ class CartaDevolucionSerializer(serializers.ModelSerializer):
             if not material:
                 continue
 
-            # Buscamos cuánto se despachó originalmente en la Carta de Retiro
             detalles_retiro = DetalleRetiro.objects.filter(carta_retiro=carta_retiro, material=material)
             total_despachado = sum([d.cantidad for d in detalles_retiro])
 
@@ -268,7 +441,6 @@ class CartaDevolucionSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles', [])
-        
         carta_devolucion = CartaDevolucion.objects.create(**validated_data)
         
         for detalle_data in detalles_data:
@@ -284,10 +456,24 @@ class CartaDevolucionSerializer(serializers.ModelSerializer):
             )
 
             if estado == 'OPERATIVO' and material_obj:
-                material_obj.stock_actual += cantidad
+                detalle_retiro = DetalleRetiro.objects.filter(
+                    carta_retiro=carta_devolucion.carta_retiro,
+                    material=material_obj,
+                ).first()
+                origen = detalle_retiro.origen if detalle_retiro else 'M'
+
+                if origen == 'O':
+                    material_obj.stock_obra += cantidad
+                else:
+                    material_obj.stock_mantenimiento += cantidad
+
+                material_obj.stock_actual = (
+                    material_obj.stock_mantenimiento + material_obj.stock_obra
+                )
                 material_obj.save()
 
         return carta_devolucion
+
 
 class DetalleCierreAnualSerializer(serializers.ModelSerializer):
     material_nombre = serializers.ReadOnlyField(source='material.nombre')
@@ -295,6 +481,7 @@ class DetalleCierreAnualSerializer(serializers.ModelSerializer):
     class Meta:
         model = DetalleCierreAnual
         fields = '__all__'
+
 
 class CierreAnualSerializer(serializers.ModelSerializer):
     detalles = DetalleCierreAnualSerializer(many=True, read_only=True)
@@ -321,9 +508,6 @@ class CierreAnualSerializer(serializers.ModelSerializer):
         )
 
     def validate(self, data):
-        """
-        Validar que no exista un cierre anual para el mismo año.
-        """
         fecha_inicio = data.get('fecha_inicio')
         fecha_cierre = data.get('fecha_cierre')
 
@@ -352,5 +536,4 @@ class CierreAnualSerializer(serializers.ModelSerializer):
                         'La fecha de cierre debe ser exactamente 365 dias posterios a la fecha de inicio del cierre anual.'
                     )
                 })
-            return data
-        
+        return data

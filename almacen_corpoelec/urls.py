@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     MaterialViewSet, PersonalViewSet, CierreAnualViewSet,
     ActaEntradaViewSet, CartaRetiroViewSet, CartaDevolucionViewSet, descargar_kardex_excel, generar_kardex_excel_directo, obtener_kardex_material,
+    UsuarioViewSet, SolicitudLiberacionViewSet, HistorialLiberacionesViewSet
 )
 
 router = DefaultRouter()
@@ -12,6 +13,10 @@ router.register(r'actas-entrada', ActaEntradaViewSet)
 router.register(r'cartas-retiro', CartaRetiroViewSet)
 router.register(r'cierre-anuales', CierreAnualViewSet)
 router.register(r'cartas-devolucion', CartaDevolucionViewSet)
+router.register(r'usuarios', UsuarioViewSet)
+router.register(r'liberaciones', SolicitudLiberacionViewSet, basename='liberaciones')
+router.register(r'historial-liberaciones', HistorialLiberacionesViewSet, basename='historial-liberaciones')
+
 
 urlpatterns = [
     path('', include(router.urls)),

@@ -4,8 +4,9 @@ import ModalActaIngreso from './ActaDeIngreso';
 import ModalCartaRD from './CartaRD';
 import ModalDevolucion from './Devolucion';
 import KardexView from './KardexView'; // <-- 1. IMPORTAMOS LA VISTA DE KARDEX
+import Liberaciones from './Liberaciones';
 
-export default function Inventario() {
+export default function Inventario({ user }) {
   const [materiales, setMateriales] = useState([]);
   const [busqueda, setBusqueda] = useState('');
   const [cargando, setCargando] = useState(true);
@@ -13,6 +14,7 @@ export default function Inventario() {
   const [modalIngresoAbierto, setModalIngresoAbierto] = useState(false);
   const [modalCartaRD, setModalCartaRD] = useState(false);
   const [modalDevolucion, setModalDevolucion] = useState(false);
+  const [modalLiberaciones, setModalLiberaciones] = useState(false);
 
   // <-- 2. ESTADO PARA MANTENER EL MATERIAL SELECCIONADO DEL KARDEX
   const [materialIdKardex, setMaterialIdKardex] = useState(null);
@@ -129,7 +131,13 @@ const manejarCrear = async (e) => {
   }
 };
 
+  const isAdmin = user?.rol === 'admin'; // Verifica si el usuario es administrador
+
   const manejarEliminar = async (codigo) => {
+    if (!isAdmin) {
+      alert('No tiene permisos para eliminar materiales. Solo usuarios administradores.');
+      return;
+    }
     if (!confirm(`¿Deseas eliminar el material con código ${codigo}?`)) return;
 
     try {
@@ -177,6 +185,10 @@ const manejarCrear = async (e) => {
 
           <button onClick={() => setModalDevolucion(true)} className="btn-primary">
             ↩️ Registrar Devolución
+          </button>
+
+          <button onClick={() => setModalLiberaciones(true)} className="btn-accent">
+            📜 Liberaciones de Obra
           </button>
         </div>
       </div>
@@ -288,28 +300,37 @@ const manejarCrear = async (e) => {
           <table className="custom-table">
             <thead>
               <tr>
-                <th style={{ width: '15%' }}>Código SAP</th>
-                <th style={{ width: '40%' }}>Nombre del Material</th>
-                <th style={{ width: '15%', textAlign: 'center' }}>Unidad</th>
-                <th style={{ width: '10%', textAlign: 'right' }}>Stock Actual</th>
+                <th style={{ width: '10%' }}>Código SAP</th>
+                <th style={{ width: '28%' }}>Nombre del Material</th>
+                <th style={{ width: '8%', textAlign: 'center' }}>Unidad</th>
+                <th style={{ width: '12%', textAlign: 'right' }}>Stock Mantenimiento (Libre)</th>
+                <th style={{ width: '12%', textAlign: 'right' }}>Stock Obra (Reservado)</th>
+                <th style={{ width: '10%', textAlign: 'right' }}>Stock Total</th>
                 <th style={{ width: '20%', textAlign: 'center' }}>Acciones</th>
               </tr>
             </thead>
             <tbody>
               {cargando ? (
                 <tr>
-                  <td colSpan="5" className="table-empty-cell">
+                  <td colSpan="7" className="table-empty-cell">
                     Cargando inventario de almacén...
                   </td>
                 </tr>
               ) : materialesFiltrados.length === 0 ? (
                 <tr>
-                  <td colSpan="5" className="table-empty-cell">
+                  <td colSpan="7" className="table-empty-cell">
                     {busqueda ? 'No se encontraron resultados para la búsqueda.' : 'No hay materiales en el inventario.'}
                   </td>
                 </tr>
               ) : (
-                materialesFiltrados.map((item) => (
+                materialesFiltrados.map((item) => {
+                  const stockMantenimiento = Number(item.stock_mantenimiento || 0);
+                  const stockObra = Number(item.stock_obra || 0);
+                  const stockTotal = Number(
+                    item.stock_total !== undefined ? item.stock_total : stockMantenimiento + stockObra
+                  );
+
+                  return (
                   <tr key={item.codigo}>
                     <td className="font-bold">{item.codigo}</td>
                     <td>{item.nombre}</td>
@@ -317,7 +338,15 @@ const manejarCrear = async (e) => {
                       <span className="badge-cargo">{item.unidad_medida}</span>
                     </td>
                     <td style={{ textAlign: 'right' }} className="font-bold">
-                      {item.stock_actual}
+                      {stockMantenimiento}
+                    </td>
+                    <td style={{ textAlign: 'right' }} className="font-bold">
+                      <span style={{ color: stockObra > 0 ? '#b45309' : undefined }}>
+                        {stockObra}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right' }} className="font-bold">
+                      {stockTotal}
                     </td>
                     <td style={{ textAlign: 'center', display: 'flex', gap: '8px', justifyContent: 'center' }}>
                       {/* <-- 3. BOTÓN PARA ABRIR EL KARDEX --> */}
@@ -341,7 +370,8 @@ const manejarCrear = async (e) => {
                       </button>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -359,12 +389,20 @@ const manejarCrear = async (e) => {
         isOpen={modalCartaRD}
         onClose={() => setModalCartaRD(false)}
         alGuardarExito={cargarMateriales}
+        user={user}
       />
 
       <ModalDevolucion
         isOpen={modalDevolucion}
         onClose={() => setModalDevolucion(false)}
         alGuardarExito={cargarMateriales}
+      />
+
+      <Liberaciones
+        isOpen={modalLiberaciones}
+        onClose={() => setModalLiberaciones(false)}
+        user={user}
+        alCambiarStock={cargarMateriales}
       />
 
       {/* <-- 4. MODAL DEL KARDEX DE MATERIAL --> */}

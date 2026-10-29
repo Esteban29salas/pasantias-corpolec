@@ -79,6 +79,18 @@ class Material(models.Model):
         default=0.00,
         verbose_name="Stock Actual",
         )
+    stock_mantenimiento = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Stock Mantenimiento (Libre)",
+        )
+    stock_obra = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Stock Obra (Reservado)",
+        )
     pag_kardex = models.IntegerField(
         null=True,
         blank=True,
@@ -99,6 +111,10 @@ class Material(models.Model):
                     # Asigna el siguiente consecutivo o empieza en 1 si es el primer registro
             self.pag_kardex = (max_pag or 0) + 1
         super().save(*args, **kwargs)
+
+    @property
+    def stock_total(self):
+        return (self.stock_mantenimiento or 0) + (self.stock_obra or 0)
 
     def __str__(self):
         return f"{self.codigo} - {self.nombre} - {self.unidad_medida}, {self.fecha_ingreso})"
@@ -173,6 +189,12 @@ class DetalleActa(models.Model):
         default=EstadoMaterial.OPERATIVO
     )
     observaciones = models.TextField(blank=True, null=True)
+    destino = models.CharField(
+        max_length=1,
+        choices=(('M', 'Mantenimiento'), ('O', 'Obra')),
+        default='M',
+        help_text="Destino del material ingresado: Mantenimiento u Obra"
+    )
 
 class CartaRetiro(models.Model):
     codigo_retiro = models.CharField(max_length=20, unique=True, blank=True)
@@ -208,6 +230,68 @@ class DetalleRetiro(models.Model):
         blank=True,)
     retirado_por = models.ForeignKey(Personal, on_delete=models.PROTECT, related_name='detalles_retiradas',null=True, 
         blank=True,)
+    origen = models.CharField(
+        max_length=1,
+        choices=(('M', 'Mantenimiento'), ('O', 'Obra')),
+        default='M',
+        help_text="Origen del despacho: Stock Mantenimiento u Obra"
+    )
+
+class SolicitudLiberacion(models.Model):
+    ESTADO_CHOICES = (
+        ('PENDIENTE', 'Pendiente'),
+        ('APROBADA', 'Aprobada'),
+        ('RECHAZADA', 'Rechazada'),
+    )
+
+    material = models.ForeignKey(Material, on_delete=models.PROTECT, related_name='solicitudes_liberacion')
+    cantidad = models.DecimalField(max_digits=12, decimal_places=2)
+    carta_retiro = models.ForeignKey(
+        CartaRetiro, on_delete=models.CASCADE, related_name='solicitudes_liberacion',
+        null=True, blank=True
+    )
+    detalle_retiro = models.ForeignKey(
+        DetalleRetiro, on_delete=models.CASCADE, related_name='solicitudes_liberacion',
+        null=True, blank=True
+    )
+    proyecto_origen = models.CharField(max_length=255, blank=True, default='')
+    motivo = models.TextField(blank=True, null=True)
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='PENDIENTE')
+    solicitado_por_id = models.IntegerField(null=True, blank=True)
+    solicitado_por_nombre = models.CharField(max_length=150, blank=True, default='')
+    aprobado_por_id = models.IntegerField(null=True, blank=True)
+    aprobado_por_nombre = models.CharField(max_length=150, blank=True, default='')
+    fecha_solicitud = models.DateTimeField(auto_now_add=True)
+    fecha_resolucion = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"Solicitud {self.id} - {self.material} - {self.estado}"
+
+    class Meta:
+        db_table = 'SolicitudLiberacion'
+        ordering = ['-fecha_solicitud']
+
+
+class HistorialLiberaciones(models.Model):
+    material = models.ForeignKey(Material, on_delete=models.PROTECT, related_name='historial_liberaciones')
+    cantidad = models.DecimalField(max_digits=12, decimal_places=2)
+    proyecto_origen = models.CharField(max_length=255, blank=True, default='')
+    administrador_id = models.IntegerField(null=True, blank=True)
+    administrador_nombre = models.CharField(max_length=150, blank=True, default='')
+    motivo = models.TextField(blank=True, null=True)
+    numero_documento = models.CharField(max_length=100, blank=True, default='')
+    solicitud = models.ForeignKey(
+        SolicitudLiberacion, on_delete=models.SET_NULL, related_name='historial',
+        null=True, blank=True
+    )
+    fecha_hora = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Liberación {self.material} x {self.cantidad} - {self.fecha_hora}"
+
+    class Meta:
+        db_table = 'HistorialLiberaciones'
+        ordering = ['-fecha_hora']
 
 class CartaDevolucion(models.Model):
     carta_retiro = models.ForeignKey(CartaRetiro, on_delete=models.PROTECT, related_name='devoluciones')
@@ -287,3 +371,26 @@ class OrdenSalidaLaFria(models.Model):
 
     class Meta:
         db_table = 'orden_salida_lafria'
+
+class Usuario(models.Model):
+    ROL_CHOICES = (
+        ('normal', 'Normal'),
+        ('admin', 'Administrador'),
+    )
+    id = models.AutoField(primary_key=True)
+    cedula = models.CharField(max_length=20, unique=True)
+    nombres = models.CharField(max_length=100)
+    apellidos = models.CharField(max_length=100)
+    fecha_nacimiento = models.DateField()
+    cargo = models.CharField(max_length=100)
+    email = models.EmailField(max_length=150, unique=True)
+    password = models.CharField(max_length=255)
+    rol = models.CharField(max_length=10, choices=ROL_CHOICES, default='normal')
+    fecha_registro = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'usuarios'
+        managed = False
+
+    def __str__(self):
+        return f"{self.cedula} - {self.email} - {self.rol}"

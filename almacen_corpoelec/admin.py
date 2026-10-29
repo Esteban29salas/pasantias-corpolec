@@ -3,7 +3,8 @@ from .models import (
     Material, Personal, 
     ActaEntrada, DetalleActa, CierreAnual,
     DetalleCierreAnual, CartaRetiro, DetalleRetiro, 
-    CartaDevolucion, DetalleDevolucion
+    CartaDevolucion, DetalleDevolucion,
+    SolicitudLiberacion, HistorialLiberaciones
 )
 
 admin.site.register(Material)
@@ -16,5 +17,7 @@ admin.site.register(CartaDevolucion)
 admin.site.register(DetalleDevolucion)
 admin.site.register(CierreAnual)
 admin.site.register(DetalleCierreAnual)
+admin.site.register(SolicitudLiberacion)
+admin.site.register(HistorialLiberaciones)
 
 # Register your models here.

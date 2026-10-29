@@ -3,7 +3,7 @@ import "../App.css";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-export default function ModalCartaRD({ isOpen, onClose, alGuardarExito }) {
+export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) {
   const formRef = useRef(null);
   const UNIDAD_TECNICA_DEFAULT = "DPTO MTTO Y ATC AVER SC TC LA FRIA TACHIRA";
   const CECO_CODIGO = "E350203";
@@ -43,6 +43,7 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito }) {
       cantidad_devuelta: 0,
       observacion: "",
       pag: "1",
+      origen: "M",
     },
   ]);
 
@@ -132,15 +133,19 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito }) {
     return mensaje;
   };
 
-  const validarCampoDetalle = (index, campo, valor) => {
+  const validarCampoDetalle = (index, campo, valor, itemActual) => {
     let mensaje = "";
     if (campo === "material" && !valor) {
       mensaje = "Seleccione un material.";
     }
     if (campo === "cantidad_despachada") {
       const cant = parseFloat(valor);
+      const stockMax = itemActual?.stock_disponible !== undefined ? itemActual.stock_disponible : Infinity;
       if (isNaN(cant) || cant <= 0) {
-        mensaje = "Mayor a 0.";
+        mensaje = "La cantidad debe ser mayor a 0.";
+      }
+      else if (cant > stockMax) {
+        mensaje = `La cantidad no puede superar el stock disponible (${stockMax}).`;
       }
     }
 
@@ -160,22 +165,46 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito }) {
     validarCampoCabecera(campo, valor);
   };
 
+  const obtenerStockDisponible = (material, origen) => {
+    if (!material) return 0;
+    return origen === "O"
+      ? Number(material.stock_obra || 0)
+      : Number(material.stock_mantenimiento || 0);
+  };
+
   const handleChangeDetalle = (index, campo, valor) => {
     const nuevosDetalles = [...detalles];
     nuevosDetalles[index][campo] = valor;
 
-    if (campo === "material") {
-      const matEncontrado = materialList.find((m) => String(m.codigo) === String(valor));
+    if (campo === "material" || campo === "origen") {
+      const matEncontrado = materialList.find(
+        (m) => String(m.codigo) === String(nuevosDetalles[index].material)
+      );
       if (matEncontrado) {
-        nuevosDetalles[index].descripcion = matEncontrado.descripcion || matEncontrado.nombre || "";
-        nuevosDetalles[index].unidad_medida = matEncontrado.unidad_medida || "UND";
-        // Asignación automática y bloqueada del folio/página del Kardex
-        nuevosDetalles[index].pag = matEncontrado.pag_kardex ? String(matEncontrado.pag_kardex) : "1";
+        if (campo === "material") {
+          nuevosDetalles[index].descripcion = matEncontrado.descripcion || matEncontrado.nombre || "";
+          nuevosDetalles[index].unidad_medida = matEncontrado.unidad_medida || "UND";
+          nuevosDetalles[index].pag = matEncontrado.pag_kardex ? String(matEncontrado.pag_kardex) : "1";
+        }
+        // El stock disponible depende del origen seleccionado (Mantenimiento u Obra)
+        nuevosDetalles[index].stock_disponible = obtenerStockDisponible(
+          matEncontrado,
+          nuevosDetalles[index].origen || "M"
+        );
       }
     }
 
     setDetalles(nuevosDetalles);
-    validarCampoDetalle(index, campo, valor);
+    validarCampoDetalle(index, campo, valor, nuevosDetalles[index]);
+
+    if ((campo === "material" || campo === "origen") && nuevosDetalles[index].material) {
+      validarCampoDetalle(
+        index,
+        "cantidad_despachada",
+        nuevosDetalles[index].cantidad_despachada,
+        nuevosDetalles[index]
+      );
+    }
   };
 
   const agregarFila = () => {
@@ -190,6 +219,7 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito }) {
         cantidad_devuelta: 0,
         observacion: "",
         pag: "1",
+        origen: "M",
       },
     ]);
     setErrors((prev) => ({
@@ -226,6 +256,7 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito }) {
           cantidad_despachada: d.cantidad_despachada,
           cantidad_devuelta: 0,
           observacion: d.observacion,
+          destino: d.origen || "M",
         })),
       };
 
@@ -392,7 +423,10 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito }) {
         condicion: item.condicion,
         observacion: item.observacion,
         pag: item.pag,
+        origen: item.origen || "M",
       })),
+      usuario_id: user?.id,
+      usuario_nombre: user?.nombreCompleto,
     };
 
     try {
@@ -412,7 +446,13 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito }) {
       }
 
       if (res.ok) {
-        alert("Carta de Retiro procesada y stock actualizado correctamente.");
+        if (data?.solicitudes_creadas > 0) {
+          alert(
+            `Carta de Retiro registrada. El stock de Mantenimiento fue descontado de inmediato y ${data.solicitudes_creadas} solicitud(es) de material de Obra quedaron PENDIENTES de aprobación por el administrador.`
+          );
+        } else {
+          alert("Carta de Retiro procesada y stock de Mantenimiento actualizado correctamente.");
+        }
         if (alGuardarExito) alGuardarExito();
         onClose();
       } else {
@@ -607,6 +647,7 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito }) {
                       <th style={{ minWidth: "180px" }}>08. Descripción</th>
                       <th style={{ width: "65px", textAlign: "center" }}>09. U/M</th>
                       <th style={{ width: "120px", textAlign: "center" }}>10. Cond.</th>
+                      <th style={{ width: "140px", textAlign: "center" }}>Origen *</th>
                       <th style={{ width: "110px", textAlign: "center" }}>11. Cant. Desp. *</th>
                       <th style={{ width: "90px", textAlign: "center" }}>12. Cant. Dev.</th>
                       <th style={{ minWidth: "140px" }}>13. Observaciones</th>
@@ -664,17 +705,35 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito }) {
                             </select>
                           </td>
                           <td>
+                            <select
+                              value={mat.origen || "M"}
+                              onChange={(e) => handleChangeDetalle(idx, "origen", e.target.value)}
+                              className="form-input"
+                              title="Origen del despacho"
+                            >
+                              <option value="M">M - Mantenimiento</option>
+                              <option value="O">O - Obra</option>
+                            </select>
+                            {mat.material && (
+                              <span style={{ display: "block", fontSize: "10px", color: "#64748b" }}>
+                                Stock: {mat.stock_disponible ?? 0}
+                              </span>
+                            )}
+                          </td>
+                          <td>
                             <input
                               type="number"
-                              min="0"
-                              step="1"
+                              min="1"
+                              max={mat.stock_disponible || 99999}
                               value={mat.cantidad_despachada}
                               onChange={(e) => handleChangeDetalle(idx, "cantidad_despachada", e.target.value)}
-                              onBlur={(e) => validarCampoDetalle(idx, "cantidad_despachada", e.target.value)}
+                              onBlur={(e) => validarCampoDetalle(idx, "cantidad_despachada", e.target.value, mat)}
                               className={`form-input text-right font-bold ${errDetalle.cantidad_despachada ? "input-error" : ""}`}
                             />
                             {errDetalle.cantidad_despachada && (
-                              <span className="error-text">{errDetalle.cantidad_despachada}</span>
+                              <span className="error-text" style={{ color: "#dc2626", fontSize: "11px", display: "block" }}>
+                                {errDetalle.cantidad_despachada}
+                              </span>
                             )}
                           </td>
                           <td>

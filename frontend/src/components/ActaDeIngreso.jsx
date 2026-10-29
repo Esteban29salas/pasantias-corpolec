@@ -42,6 +42,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
       cantidad_devuelta: 0,
       observacion: "",
       pag: "1",
+      destino: "M",
     },
   ]);
 
@@ -231,6 +232,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
         cantidad_devuelta: 0,
         observacion: "",
         pag: "1",
+        destino: "M",
       },
     ]);
     setErrors((prev) => ({
@@ -275,6 +277,8 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
           const cond = String(row["Condición"] || row["Condicion"] || "OPERATIVO").trim();
           const obs = String(row["Observaciones"] || row["Observacion"] || "").trim();
           const pagina = String(row["Pág"] || "1").trim();
+          const destinoRaw = String(row["Destino"] || row["Origen"] || "M").trim().toUpperCase();
+          const destino = destinoRaw.startsWith("O") ? "O" : "M";
 
           return {
             material: codSap,
@@ -285,6 +289,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
             cantidad_devuelta: 0,
             observacion: obs,
             pag: pagina,
+            destino,
           };
         });
 
@@ -304,6 +309,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
   };
 
   // --- EXPORTACIÓN ---
+// --- EXPORTACIÓN ---
   const handleExportExcel = async () => {
     try {
       const payload = {
@@ -314,15 +320,17 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
           retirado_por: cabecera.recibido_por,
           destino_circuito: cabecera.observaciones_generales,
         },
-        detalles: detalles.map((d) => ({
-          codigo_sap: d.material,
-          descripcion: d.descripcion,
-          unidad_medida: d.unidad_medida || "UND",
-          estado: d.condicion || "OPERATIVO",
-          cantidad_despachada: d.cantidad_despachada || 0,
-          cantidad_devuelta: 0,
-          observacion: d.observacion || "",
-        })),
+        detalles: detalles.map((item) => {
+          const matObj = materialList.find((m) => String(m.codigo) === String(item.material));
+          return {
+            material: matObj ? matObj.id : item.material,
+            cantidad: parseInt(String(item.cantidad_despachada).replace(",", ".").split(".")[0], 10),
+            unidad_medida: item.unidad_medida,
+            estado: item.condicion || "OPERATIVO",
+            observacion: item.observacion,
+            destino: item.destino || "M",
+          };
+        }),
       };
 
       const response = await fetch("http://localhost:8000/api/kardex/excel/generar/", {
@@ -499,6 +507,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
         cantidad_devuelta: 0,
         observacion: "",
         pag: "1",
+        destino: "M",
       },
     ]);
 
@@ -569,6 +578,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
         unidad_medida: item.unidad_medida,
         estado: item.condicion || "OPERATIVO",
         observacion: item.observacion,
+        destino: item.destino || "M",
       })),
     };
 
@@ -801,6 +811,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
                       <th style={{ textAlign: "left", minWidth: "180px" }}>08. Descripción</th>
                       <th style={{ textAlign: "center", width: "65px" }}>09. U/M</th>
                       <th style={{ textAlign: "center", width: "120px" }}>10. Cond.</th>
+                      <th style={{ textAlign: "center", width: "130px" }}>Destino *</th>
                       <th style={{ textAlign: "center", width: "100px" }}>11. Cant. Desp. *</th>
                       <th style={{ textAlign: "center", width: "90px" }}>12. Cant. Dev.</th>
                       <th style={{ textAlign: "left", minWidth: "140px" }}>13. Observaciones *</th>
@@ -859,6 +870,17 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
                               <option value="OPERATIVO">OPERATIVO</option>
                               <option value="DETERIORADO">DETERIORADO</option>
                               <option value="REPARACION">EN REPARACIÓN</option>
+                            </select>
+                          </td>
+                          <td>
+                            <select
+                              value={mat.destino || "M"}
+                              onChange={(e) => handleChangeDetalle(idx, "destino", e.target.value)}
+                              className="form-control"
+                              title="Destino del material ingresado"
+                            >
+                              <option value="M">M - Mantenimiento</option>
+                              <option value="O">O - Obra</option>
                             </select>
                           </td>
                           <td>

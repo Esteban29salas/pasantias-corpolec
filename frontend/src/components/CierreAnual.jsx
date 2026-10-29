@@ -1,125 +1,305 @@
-import { useState } from 'react';
+import { useState, useEffect } from "react";
+import ModalDetalleDocumento from "./ModalDetalles";
+import ModalCrearCierre from "./ModalCrearCierre"; // 👈 Modal nuevo para crear cierre
 
-export default function CierreAnual({ alCompletarCierre }) {
-  const [ano, setAno] = useState(new Date().getFullYear());
-  const [cargando, setCargando] = useState(false);
-  const [respuestaBackend, setRespuestaBackend] = useState(null);
+export default function HistorialConsultasAnuales() {
+  const [cierres, setCierres] = useState([]);
+  const [cierreSeleccionado, setCierreSeleccionado] = useState(null);
+  
+  const fechaHoy = new Date().toISOString().split("T")[0];
+  const [fechaDesde, setFechaDesde] = useState("");
+  const [fechaHasta, setFechaHasta] = useState("");
+  const [errorFecha, setErrorFecha] = useState(""); // 👈 Estado para validación inline
+  
+  const [actasEntrada, setActasEntrada] = useState([]);
+  const [cartasRetiro, setCartasRetiro] = useState([]);
+  const [cartasDevolucion, setCartasDevolucion] = useState([]);
+  
+  const [filtroTipo, setFiltroTipo] = useState("TODOS");
+  const [documentoSeleccionado, setDocumentoSeleccionado] = useState(null);
+  const [modalCierreAbierto, setModalCierreAbierto] = useState(false); // 👈 Control del modal
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const cargarCierres = () => {
+    fetch("http://localhost:8000/api/cierre-anuales/")
+      .then((res) => res.json())
+      .then((data) => setCierres(Array.isArray(data) ? data : []))
+      .catch((err) => console.error("Error al cargar cierres:", err));
+  };
 
-    if (!window.confirm(`¿Confirmas ejecutar el Cierre de Año Fiscal ${ano}?`)) {
-      return;
-    }
+  useEffect(() => {
+    cargarCierres();
 
-    setCargando(true);
-    setRespuestaBackend(null);
+    fetch("http://localhost:8000/api/actas-entrada/")
+      .then((res) => res.json())
+      .then((data) => setActasEntrada(Array.isArray(data) ? data : []));
 
-    try {
-      const res = await fetch('http://127.0.0.1:8000/api/cierre-anuales/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ano: parseInt(ano, 10) })
-      });
+    fetch("http://localhost:8000/api/cartas-retiro/")
+      .then((res) => res.json())
+      .then((data) => setCartasRetiro(Array.isArray(data) ? data : []));
 
-      const data = await res.json();
+    fetch("http://localhost:8000/api/cartas-devolucion/")
+      .then((res) => res.json())
+      .then((data) => setCartasDevolucion(Array.isArray(data) ? data : []));
+  }, []);
 
-      if (res.ok) {
-        setRespuestaBackend({ exito: true, datos: data });
-        if (alCompletarCierre) alCompletarCierre();
-      } else {
-        setRespuestaBackend({ exito: false, errores: data });
-      }
-    } catch (error) {
-      console.error(error);
-      setRespuestaBackend({ exito: false, errores: { detalle: 'Error de conexión con el servidor.' } });
-    } finally {
-      setCargando(false);
+  const handleDesdeChange = (e) => {
+    const valor = e.target.value;
+    setFechaDesde(valor);
+    if (fechaHasta && valor > fechaHasta) {
+      setErrorFecha("La fecha 'Desde' no puede ser posterior a la fecha 'Hasta'.");
+    } else {
+      setErrorFecha("");
     }
   };
 
+  const handleHastaChange = (e) => {
+    const valor = e.target.value;
+    if (fechaDesde && valor < fechaDesde) {
+      setErrorFecha("La fecha 'Hasta' no puede ser anterior a la fecha 'Desde'.");
+    } else {
+      setErrorFecha("");
+      setFechaHasta(valor);
+    }
+  };
+
+  const obtenerDatosFiltrados = () => {
+    let lista = [];
+
+    if (filtroTipo === "TODOS" || filtroTipo === "ACTAS") {
+      lista = [
+        ...lista,
+        ...actasEntrada.map((item) => ({
+          ...item,
+          tipo_doc: "Acta Entrada",
+          numero: item.numero_acta || item.codigo || `ACTA-${item.id}`,
+          fecha: item.fecha_recepcion || item.fecha || "-",
+          observacion: item.observaciones || "Sin observaciones",
+        })),
+      ];
+    }
+
+    if (filtroTipo === "TODOS" || filtroTipo === "RETIROS") {
+      lista = [
+        ...lista,
+        ...cartasRetiro.map((item) => ({
+          ...item,
+          tipo_doc: "Carta Retiro",
+          numero: item.codigo_retiro || String(item.id).padStart(5, "0"),
+          fecha: item.fecha_hora || item.fecha || "-",
+          observacion: item.observaciones || item.destino_circuito || "Sin observaciones",
+        })),
+      ];
+    }
+
+    if (filtroTipo === "TODOS" || filtroTipo === "DEVOLUCIONES") {
+      lista = [
+        ...lista,
+        ...cartasDevolucion.map((item) => {
+          const codRetiro =
+            item.codigo_retiro ||
+            item.carta_retiro_codigo ||
+            (typeof item.carta_retiro === "object" ? item.carta_retiro?.codigo_retiro : item.carta_retiro) ||
+            item.id;
+
+          const fechaDev = item.fecha_devolucion || item.fecha_hora || item.fecha || "-";
+
+          return {
+            ...item,
+            tipo_doc: "Carta Devolución",
+            numero: typeof codRetiro === "number" ? String(codRetiro).padStart(5, "0") : codRetiro,
+            fecha: fechaDev,
+            observacion: item.observaciones || "Sin observaciones",
+          };
+        }),
+      ];
+    }
+
+    if (cierreSeleccionado) {
+      lista = lista.filter((item) => {
+        if (!item.fecha || item.fecha === "-") return false;
+        const fechaItem = item.fecha.split("T")[0];
+        return fechaItem >= cierreSeleccionado.fecha_inicio.split("T")[0] && 
+               fechaItem <= cierreSeleccionado.fecha_cierre.split("T")[0];
+      });
+    }
+
+    if (fechaDesde) {
+      lista = lista.filter((item) => {
+        if (!item.fecha || item.fecha === "-") return false;
+        return item.fecha.split("T")[0] >= fechaDesde;
+      });
+    }
+
+    if (fechaHasta && !errorFecha) {
+      lista = lista.filter((item) => {
+        if (!item.fecha || item.fecha === "-") return false;
+        return item.fecha.split("T")[0] <= fechaHasta;
+      });
+    }
+
+    return lista;
+  };
+
+  const datosMostrados = obtenerDatosFiltrados();
+
+  const limpiarFiltrosFechas = () => {
+    setFechaDesde("");
+    setFechaHasta("");
+    setErrorFecha("");
+  };
+
   return (
-    <div style={styles.card}>
-      <h2 style={styles.titulo}>Cierre de Año Fiscal</h2>
-      <p style={styles.descripcion}>
-        Consolida los saldos finales del período y proyecta el inventario para el siguiente ejercicio.
-      </p>
-
-      <form onSubmit={handleSubmit} style={styles.form}>
-        <div style={styles.grupoInput}>
-          <label style={styles.label}>Año del Ejercicio:</label>
-          <input
-            type="number"
-            value={ano}
-            onChange={(e) => setAno(e.target.value)}
-            min="2020"
-            max="2030"
-            required
-            style={styles.input}
-          />
-        </div>
-
-        <button
-          type="submit"
-          disabled={cargando}
-          style={{
-            ...styles.boton,
-            backgroundColor: cargando ? '#888' : '#c82333',
-            cursor: cargando ? 'not-allowed' : 'pointer'
-          }}
+    <div className="card-container" style={{ padding: "20px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
+        <h3 className="card-title" style={{ color: "#059669", margin: 0 }}>
+          Consulta Histórica y Auditoría por Cierre Anual
+        </h3>
+        <button 
+          onClick={() => setModalCierreAbierto(true)}
+          className="btn-blue"
+          style={{ backgroundColor: "#059669" }}
         >
-          {cargando ? 'Procesando...' : `Ejecutar Cierre ${ano}`}
+          + Nuevo Cierre Anual
         </button>
-      </form>
+      </div>
 
-      {/* Retroalimentación basada en la respuesta del Backend */}
-      {respuestaBackend && (
-        <div
-          style={{
-            ...styles.alerta,
-            backgroundColor: respuestaBackend.exito ? '#d4edda' : '#f8d7da',
-            borderColor: respuestaBackend.exito ? '#c3e6cb' : '#f5c6cb',
-            color: respuestaBackend.exito ? '#155724' : '#721c24'
-          }}
-        >
-          {respuestaBackend.exito ? (
-            <div>
-              <strong>✓ Procesado con éxito:</strong>
-              <p style={{ margin: '5px 0 0 0' }}>
-                {respuestaBackend.datos.mensaje || 'Cierre registrado correctamente.'}
-              </p>
-            </div>
-          ) : (
-            <div>
-              <strong>✗ Error al procesar:</strong>
-              <pre style={styles.jsonError}>
-                {JSON.stringify(respuestaBackend.errores, null, 2)}
-              </pre>
-            </div>
-          )}
+      {/* Contenedor de Filtros */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "20px", marginBottom: "20px", alignItems: "flex-start" }}>
+        <div>
+          <label className="form-label" style={{ display: "block", marginBottom: "5px" }}>Seleccionar Periodo / Cierre Anual:</label>
+          <select 
+            className="form-input"
+            style={{ minWidth: "280px" }}
+            value={cierreSeleccionado ? cierreSeleccionado.id : ""}
+            onChange={(e) => {
+              const id = e.target.value;
+              const encontrado = cierres.find(c => String(c.id) === String(id));
+              setCierreSeleccionado(encontrado || null);
+            }}
+          >
+            <option value="">-- Ver Todo / Sin Filtro de Año --</option>
+            {cierres.map((c) => (
+              <option key={c.id} value={c.id}>
+                Periodo: {c.fecha_inicio.split("T")[0]} al {c.fecha_cierre.split("T")[0]} ({c.observaciones || "Sin obs."})
+              </option>
+            ))}
+          </select>
         </div>
+
+        <div>
+          <div style={{ display: "flex", gap: "10px", alignItems: "flex-end" }}>
+            <div>
+              <label className="form-label" style={{ display: "block", marginBottom: "5px" }}>Desde:</label>
+              <input 
+                type="date"
+                className="form-input"
+                max={fechaHoy}
+                value={fechaDesde}
+                onChange={handleDesdeChange}
+              />
+            </div>
+            <div>
+              <label className="form-label" style={{ display: "block", marginBottom: "5px" }}>Hasta:</label>
+              <input 
+                type="date"
+                className="form-input"
+                max={fechaHoy}
+                value={fechaHasta}
+                onChange={handleHastaChange}
+              />
+            </div>
+            {(fechaDesde || fechaHasta) && (
+              <button 
+                type="button" 
+                onClick={limpiarFiltrosFechas} 
+                className="btn-cancel"
+                style={{ height: "38px", padding: "0 12px" }}
+              >
+                Limpiar Fechas
+              </button>
+            )}
+          </div>
+          {/* Validación Inline en texto rojo */}
+          {errorFecha && <span className="error-msg" style={{ display: "block", marginTop: "5px", color: "#dc2626", fontSize: "12px" }}>{errorFecha}</span>}
+        </div>
+      </div>
+
+      {cierreSeleccionado && (
+        <div style={{ background: "#ecfdf5", padding: "10px", borderRadius: "6px", marginBottom: "15px", fontSize: "12px", color: "#065f46" }}>
+          Filtrando bajo el cierre seleccionado del <strong>{cierreSeleccionado.fecha_inicio.split("T")[0]}</strong> al <strong>{cierreSeleccionado.fecha_cierre.split("T")[0]}</strong>.
+        </div>
+      )}
+
+      {/* Pestañas de Filtro de Documentos */}
+      <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
+        <button className={`btn-secondary ${filtroTipo === "TODOS" ? "active" : ""}`} onClick={() => setFiltroTipo("TODOS")}>
+          Todos ({actasEntrada.length + cartasRetiro.length + cartasDevolucion.length})
+        </button>
+        <button className={`btn-secondary ${filtroTipo === "ACTAS" ? "active" : ""}`} onClick={() => setFiltroTipo("ACTAS")}>
+          Actas de Entrada ({actasEntrada.length})
+        </button>
+        <button className={`btn-secondary ${filtroTipo === "RETIROS" ? "active" : ""}`} onClick={() => setFiltroTipo("RETIROS")}>
+          Cartas de Retiro ({cartasRetiro.length})
+        </button>
+        <button className={`btn-secondary ${filtroTipo === "DEVOLUCIONES" ? "active" : ""}`} onClick={() => setFiltroTipo("DEVOLUCIONES")}>
+          Cartas de Devolución ({cartasDevolucion.length})
+        </button>
+      </div>
+
+      {/* Tabla de Resultados */}
+      <div className="table-wrapper">
+        <table className="custom-table">
+          <thead>
+            <tr style={{ backgroundColor: "#1f4e78", color: "#fff" }}>
+              <th>Tipo Documento</th>
+              <th>N° / Código</th>
+              <th>Fecha</th>
+              <th>Observaciones / Destino</th>
+              <th>Acción</th>
+            </tr>
+          </thead>
+          <tbody>
+            {datosMostrados.length === 0 ? (
+              <tr>
+                <td colSpan="5" style={{ textAlign: "center", padding: "20px", color: "#64748b" }}>
+                  No hay registros disponibles para mostrar en este rango de fechas.
+                </td>
+              </tr>
+            ) : (
+              datosMostrados.map((item, index) => (
+                <tr key={index}>
+                  <td><strong>{item.tipo_doc}</strong></td>
+                  <td>{item.numero}</td>
+                  <td>{item.fecha ? item.fecha.split("T")[0] : "-"}</td>
+                  <td>{item.observacion}</td>
+                  <td>
+                    <button
+                      className="btn-secondary"
+                      style={{ padding: "3px 8px", fontSize: "11px", backgroundColor: "#1f4e78", color: "#fff" }}
+                      onClick={() => setDocumentoSeleccionado(item)}
+                    >
+                      Ver Detalle
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Modales */}
+      {documentoSeleccionado && (
+        <ModalDetalleDocumento documento={documentoSeleccionado} onClose={() => setDocumentoSeleccionado(null)} />
+      )}
+
+      {modalCierreAbierto && (
+        <ModalCrearCierre 
+          isOpen={modalCierreAbierto} 
+          onClose={() => setModalCierreAbierto(false)} 
+          alGuardarExito={cargarCierres} 
+        />
       )}
     </div>
   );
 }
-
-const styles = {
-  card: {
-    backgroundColor: '#ffffff',
-    padding: '20px',
-    borderRadius: '8px',
-    border: '1px solid #ddd',
-    maxWidth: '500px',
-    margin: '20px 0',
-    color: '#333'
-  },
-  titulo: { marginTop: 0, fontSize: '20px' },
-  descripcion: { fontSize: '14px', color: '#666', marginBottom: '20px' },
-  form: { display: 'flex', gap: '12px', alignItems: 'flex-end' },
-  grupoInput: { display: 'flex', flexDirection: 'column', gap: '6px', flex: 1 },
-  label: { fontSize: '13px', fontWeight: 'bold' },
-  input: { padding: '8px 10px', borderRadius: '4px', border: '1px solid #ccc', fontSize: '14px' },
-  boton: { padding: '9px 16px', color: '#fff', border: 'none', borderRadius: '4px', fontWeight: 'bold' },
-  alerta: { marginTop: '15px', padding: '12px', borderRadius: '4px', border: '1px solid', fontSize: '14px' },
-  jsonError: { margin: '5px 0 0 0', fontSize: '12px', whiteSpace: 'pre-wrap' }
-};
