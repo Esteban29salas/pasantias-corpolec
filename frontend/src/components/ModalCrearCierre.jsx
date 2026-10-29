@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CalendarDays, X } from "lucide-react";
 import "../App.css";
 
 export default function ModalCrearCierre({ isOpen, onClose, alGuardarExito }) {
@@ -67,13 +68,15 @@ export default function ModalCrearCierre({ isOpen, onClose, alGuardarExito }) {
       <div className="modal-content" style={{ maxWidth: "500px" }}>
         <div className="modal-header">
           <div className="modal-header-info">
-            <span className="modal-header-icon">📅</span>
+            <span className="modal-header-icon"><CalendarDays size={22} /></span>
             <div>
               <h2 className="modal-title">Registrar Nuevo Cierre Anual</h2>
               <span className="modal-subtitle">El sistema calculará automáticamente el periodo de 365 días.</span>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="btn-close-modal">✕</button>
+          <button type="button" onClick={onClose} className="btn-close-modal" title="Cerrar">
+            <X size={18} />
+          </button>
         </div>
 
         <div className="modal-body">

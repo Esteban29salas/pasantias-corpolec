@@ -12,7 +12,7 @@ const AuthPage = ({ onLoginSuccess }) => {
     }
   };
 
-  const handleRegisterSuccess = (userData) => {
+  const handleRegisterSuccess = () => {
     // Después del registro exitoso, redirigir al login o iniciar sesión automáticamente
     alert('Registro exitoso. Por favor inicie sesión.');
     setCurrentView('login');

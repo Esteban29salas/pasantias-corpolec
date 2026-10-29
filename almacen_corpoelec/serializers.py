@@ -35,7 +35,7 @@ class MovimientoKardexSerializer(serializers.ModelSerializer):
         model = MovimientoKardex
         fields = [
             'id', 'numero_documento', 'fecha', 'tipo_movimiento', 
-            'destino', 'cantidad_entrada', 'cantidad_salida', 
+            'destino', 'proyecto', 'cantidad_entrada', 'cantidad_salida', 
             'existencias', 'observaciones'
         ]
 
@@ -49,7 +49,7 @@ class MaterialKardexDetailSerializer(serializers.ModelSerializer):
         fields = [
             'codigo', 'nombre', 'nombre_material', 'descripcion', 'unidad_medida', 
             'pag_kardex', 'pag_formateado', 'stock_actual',
-            'stock_mantenimiento', 'stock_obra', 'stock_total',
+            'stock_mantenimiento', 'stock_obra', 'proyecto_obra', 'stock_total',
             'historial_kardex'
         ]
 
@@ -80,13 +80,55 @@ class MaterialSerializer(serializers.ModelSerializer):
         model = Material
         fields = [
             'codigo', 'nombre', 'descripcion', 'unidad_medida',
-            'stock_actual', 'stock_mantenimiento', 'stock_obra', 'stock_total',
+            'stock_actual', 'stock_mantenimiento', 'stock_obra', 'proyecto_obra', 'stock_total',
             'pag_kardex', 'fecha_ingreso',
         ]
         read_only_fields = ['pag_kardex']
+        extra_kwargs = {
+            'nombre': {'required': True, 'allow_blank': False},
+            'descripcion': {
+                'required': True,
+                'allow_blank': False,
+                'allow_null': False,
+            },
+        }
 
     def get_stock_total(self, obj):
         return (obj.stock_mantenimiento or 0) + (obj.stock_obra or 0)
+
+    def validate_nombre(self, value):
+        nombre = str(value).strip()
+        if not nombre:
+            raise serializers.ValidationError("El nombre del material es requerido.")
+        return nombre
+
+    def validate_descripcion(self, value):
+        descripcion = str(value).strip()
+        if not descripcion:
+            raise serializers.ValidationError("La descripción del material es requerida.")
+        return descripcion
+
+    def validate(self, attrs):
+        stock_obra_definido = 'stock_obra' in attrs
+        stock_obra = attrs.get('stock_obra', 0)
+        proyecto_obra = attrs.get(
+            'proyecto_obra',
+            getattr(self.instance, 'proyecto_obra', '') if self.instance else '',
+        )
+
+        if (
+            stock_obra_definido
+            and stock_obra
+            and stock_obra > 0
+            and not str(proyecto_obra or '').strip()
+        ):
+            raise serializers.ValidationError({
+                'proyecto_obra': (
+                    'Indique el proyecto o calle de destino cuando el stock de Obra es mayor a 0.'
+                )
+            })
+
+        return attrs
 
     def validate_unidad_medida(self, value):
         return validar_unidad_medida(value)
@@ -115,6 +157,8 @@ class MaterialSerializer(serializers.ModelSerializer):
         validated_data['stock_mantenimiento'] = mantenimiento
         validated_data['stock_obra'] = obra
         validated_data['stock_actual'] = (mantenimiento or 0) + (obra or 0)
+        if (obra or 0) <= 0:
+            validated_data['proyecto_obra'] = ''
         return validated_data
 
     def create(self, validated_data):
@@ -154,6 +198,7 @@ class DetalleActaSerializer(serializers.ModelSerializer):
             'observaciones',
             'observacion',
             'destino',
+            'proyecto',
         ]
 
     def validate(self, attrs):
@@ -222,7 +267,7 @@ class ActaEntradaSerializer(serializers.ModelSerializer):
         # 3. Creamos la cabecera del acta
         acta_entrada = ActaEntrada.objects.create(**validated_data)
         
-        # 4. Agrupamos solo duplicados exactos (material + destino + observación),
+        # 4. Agrupamos solo duplicados exactos (material + destino + observación + proyecto),
         # de forma que un mismo material pueda ingresar parte a Mantenimiento y
         # parte a Obra en la misma acta.
         detalles_unicos = {}
@@ -230,7 +275,12 @@ class ActaEntradaSerializer(serializers.ModelSerializer):
             mat = detalle.get('material')
             destino = detalle.get('destino', 'M') or 'M'
             observacion = detalle.get('observaciones') or detalle.get('observacion') or ''
-            clave = (mat.pk if hasattr(mat, 'pk') else mat, destino, observacion)
+            proyecto = detalle.get('proyecto') or detalle.get('proyecto_obra') or ''
+            if destino == 'O' and not proyecto:
+                proyecto = observacion
+            if destino != 'O':
+                proyecto = ''
+            clave = (mat.pk if hasattr(mat, 'pk') else mat, destino, observacion, proyecto)
             cant = detalle.get('cantidad', 0)
             
             if clave in detalles_unicos:
@@ -243,6 +293,7 @@ class ActaEntradaSerializer(serializers.ModelSerializer):
                     'estado': detalle.get('estado', 'OPERATIVO'),
                     'observaciones': observacion,
                     'destino': destino,
+                    'proyecto': proyecto,
                 }
 
         # Insertamos en la base de datos solo elementos únicos garantizados

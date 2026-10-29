@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Palette, Package, Users, ArrowDownToLine, ClipboardCheck, RotateCcw, ArrowLeftRight, ClipboardList, ChevronDown, Clock } from 'lucide-react';
 import ActaDeIngreso from './ActaDeIngreso';
 import ModalCartaRD from './CartaRD';
 import ModalDevolucion from './Devolucion';
@@ -10,8 +11,9 @@ import imgMppee from '../assets/Gemini_Generated_Image_m9d5w7m9d5w7m9d5.jpg';
 import imgConciencia from '../assets/Gemini_Generated_Image_yu5r4ryu5r4ryu5r.jpg';
 import imgCorpoelec from '../assets/Gemini_Generated_Image_za0dopza0dopza0d.jpg';
 
-export default function Inicio() {
+export default function Inicio({ user }) {
   const navigate = useNavigate();
+  const esAdmin = user?.rol === 'admin';
 
   // Arreglo de imágenes para el carrusel
   const imagenesCarrusel = [imgCorpoelec, imgMppee, imgConciencia, imgIso];
@@ -38,6 +40,7 @@ export default function Inicio() {
   const [modalActaOpen, setModalActaOpen] = useState(false);
   const [modalCartaRDOpen, setModalCartaRDOpen] = useState(false);
   const [modalDevolucionOpen, setModalDevolucionOpen] = useState(false);
+  const [pendientesObra, setPendientesObra] = useState(0);
 
   // Referencias para cerrar desplegables al hacer clic fuera
   const refIngreso = useRef(null);
@@ -61,13 +64,41 @@ export default function Inicio() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (esAdmin || !user?.id) return undefined;
+
+    let activo = true;
+
+    const cargarPendientes = async () => {
+      try {
+        const res = await fetch('http://localhost:8000/api/liberaciones/resumen/');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (activo) setPendientesObra(Number(data.pendientes) || 0);
+      } catch {
+        // Se reintentará en la próxima actualización.
+      }
+    };
+
+    cargarPendientes();
+    const intervalo = setInterval(cargarPendientes, 15000);
+    const actualizar = () => cargarPendientes();
+    window.addEventListener('liberaciones-actualizadas', actualizar);
+
+    return () => {
+      activo = false;
+      clearInterval(intervalo);
+      window.removeEventListener('liberaciones-actualizadas', actualizar);
+    };
+  }, [esAdmin, user?.id]);
+
   return (
     <div className="home-container">
       <div className="welcome-card">
 
         {/* SELECTOR DINÁMICO DE TEMA */}
         <div className="theme-selector">
-          <label htmlFor="theme-select">🎨 Tema de Color:</label>
+          <label htmlFor="theme-select"><Palette size={18} /> Tema de Color:</label>
           <select 
             id="theme-select" 
             className="theme-select-input" 
@@ -81,71 +112,96 @@ export default function Inicio() {
           </select>
         </div>
 
-{/* CARRUSEL INSTITUCIONAL - ESTILO BANNER PANORÁMICO */}
-<div 
-  className="carousel-container" 
-  style={{
-    position: 'relative',
-    width: '100%',
-    height: '220px',
-    borderRadius: '12px',
-    marginBottom: '25px',
-    backgroundColor: '#ffffff',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.08)',
-    overflow: 'hidden',
-    padding: '12px 20px',
-    boxSizing: 'border-box'
-  }}
->
-  <img 
-    src={imagenesCarrusel[indiceImagen]} 
-    alt="Banner Institucional Corpoelec" 
-    style={{
-      width: '100%',
-      height: '100%',
-      objectFit: 'contain', // Ajusta el logo completo dentro del banner panorámico
-      transition: 'all 0.5s ease-in-out'
-    }}
-  />
+        {/* CARRUSEL INSTITUCIONAL - ESTILO BANNER PANORÁMICO */}
+        <div 
+          className="carousel-container" 
+          style={{
+            position: 'relative',
+            width: '100%',
+            height: '220px',
+            borderRadius: '12px',
+            marginBottom: '25px',
+            backgroundColor: '#ffffff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.08)',
+            overflow: 'hidden',
+            padding: '12px 20px',
+            boxSizing: 'border-box'
+          }}
+        >
+          <img 
+            src={imagenesCarrusel[indiceImagen]} 
+            alt="Banner Institucional Corpoelec" 
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'contain',
+              transition: 'all 0.5s ease-in-out'
+            }}
+          />
 
-  {/* Puntos / Indicadores del carrusel */}
-  <div style={{
-    position: 'absolute',
-    bottom: '10px',
-    left: '50%',
-    transform: 'translateX(-50%)',
-    display: 'flex',
-    gap: '8px',
-    backgroundColor: 'rgba(255, 255, 255, 0.75)',
-    padding: '4px 12px',
-    borderRadius: '12px',
-    backdropFilter: 'blur(4px)'
-  }}>
-    {imagenesCarrusel.map((_, idx) => (
-      <span
-        key={idx}
-        onClick={() => setIndiceImagen(idx)}
-        style={{
-          width: idx === indiceImagen ? '22px' : '8px',
-          height: '8px',
-          borderRadius: '4px',
-          backgroundColor: idx === indiceImagen ? '#1F4E78' : '#cbd5e1',
-          cursor: 'pointer',
-          transition: 'all 0.3s ease'
-        }}
-      />
-    ))}
-  </div>
-</div>
+          {/* Puntos / Indicadores del carrusel */}
+          <div style={{
+            position: 'absolute',
+            bottom: '10px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            gap: '8px',
+            backgroundColor: 'rgba(255, 255, 255, 0.75)',
+            padding: '4px 12px',
+            borderRadius: '12px',
+            backdropFilter: 'blur(4px)'
+          }}>
+            {imagenesCarrusel.map((_, idx) => (
+              <span
+                key={idx}
+                onClick={() => setIndiceImagen(idx)}
+                style={{
+                  width: idx === indiceImagen ? '22px' : '8px',
+                  height: '8px',
+                  borderRadius: '4px',
+                  backgroundColor: idx === indiceImagen ? '#1F4E78' : '#cbd5e1',
+                  cursor: 'pointer',
+                  transition: 'all 0.3s ease'
+                }}
+              />
+            ))}
+          </div>
+        </div>
 
         {/* ENCABEZADO */}
         <div className="welcome-header">
           <h1>Bienvenido al Sistema de Almacén</h1>
           <p>Plataforma para el control integral de inventario, actas de ingreso y movimientos KARDEX.</p>
         </div>
+
+        {!esAdmin && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              marginBottom: '20px',
+              padding: '12px 16px',
+              borderRadius: '8px',
+              background: pendientesObra > 0 ? '#fffbeb' : '#ecfdf5',
+              border: `1px solid ${pendientesObra > 0 ? '#f59e0b' : '#10b981'}`,
+              color: pendientesObra > 0 ? '#92400e' : '#065f46',
+              fontWeight: '600',
+            }}
+          >
+            <Clock size={20} />
+            <span>Peticiones pendientes de material de obra: {pendientesObra}</span>
+            {pendientesObra > 0 && (
+              <span style={{ fontSize: '12px', fontWeight: '400' }}>
+                (en espera de aprobación del administrador)
+              </span>
+            )}
+          </div>
+        )}
 
         {/* CONTENEDOR DE BOTONES Y DESPLEGABLES */}
         <div className="actions-grid">
@@ -154,16 +210,18 @@ export default function Inicio() {
             className="action-btn btn-dark-blue"
             onClick={() => navigate('/inventario')}
           >
-            📦 Ver Inventario Completo
+            <Package size={18} /> Ver Inventario Completo
           </button>
 
-          <button 
-            type="button" 
-            className="action-btn btn-light-blue"
-            onClick={() => navigate('/personal')}
-          >
-            👥 Ver Personal Autorizado
-          </button>
+          {esAdmin && (
+            <button 
+              type="button" 
+              className="action-btn btn-light-blue"
+              onClick={() => navigate('/personal')}
+            >
+              <Users size={18} /> Ver Personal Autorizado
+            </button>
+          )}
 
           <div className="dropdown-container" ref={refIngreso}>
             <button 
@@ -174,7 +232,7 @@ export default function Inicio() {
                 setMenuRetiro(false);
               }}
             >
-              📥 Ingreso de Materiales <span className="arrow">▾</span>
+              <ArrowDownToLine size={18} /> Ingreso de Materiales <ChevronDown size={14} className="arrow" />
             </button>
 
             {menuIngreso && (
@@ -187,7 +245,7 @@ export default function Inicio() {
                     setModalActaOpen(true);
                   }}
                 >
-                  📝 Acta de Ingreso
+                  <ClipboardCheck size={16} /> Acta de Ingreso
                 </button>
                 <button 
                   type="button" 
@@ -197,7 +255,7 @@ export default function Inicio() {
                     setModalDevolucionOpen(true);
                   }}
                 >
-                  ↩️ Devolución
+                  <RotateCcw size={16} /> Devolución
                 </button>
               </div>
             )}
@@ -212,7 +270,7 @@ export default function Inicio() {
                 setMenuIngreso(false);
               }}
             >
-              🔄 Retiro y Devolución <span className="arrow">▾</span>
+              <ArrowLeftRight size={18} /> Retiro y Devolución <ChevronDown size={14} className="arrow" />
             </button>
 
             {menuRetiro && (
@@ -225,7 +283,7 @@ export default function Inicio() {
                     setModalCartaRDOpen(true);
                   }}
                 >
-                  📋 Retiro y Devolución (RD)
+                  <ClipboardList size={16} /> Retiro y Devolución (RD)
                 </button>
               </div>
             )}
@@ -244,6 +302,7 @@ export default function Inicio() {
         isOpen={modalCartaRDOpen}
         onClose={() => setModalCartaRDOpen(false)}
         alGuardarExito={() => navigate('/inventario')}
+        user={user}
       />
 
       <ModalDevolucion

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { X } from "lucide-react";
 
 export default function ModalDetalleDocumento({ documento, onClose }) {
   const [datosCompletos, setDatosCompletos] = useState(documento || {});
@@ -64,8 +65,8 @@ export default function ModalDetalleDocumento({ documento, onClose }) {
           <h3 style={{ margin: 0, color: "#1f4e78" }}>
             Detalle de {documento.tipo_doc} - N° {documento.numero}
           </h3>
-          <button onClick={onClose} style={{ background: "transparent", border: "none", fontSize: "18px", cursor: "pointer", fontWeight: "bold" }}>
-            ✕
+          <button onClick={onClose} title="Cerrar" style={{ background: "transparent", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#1f4e78" }}>
+            <X size={20} />
           </button>
         </div>
 
@@ -122,7 +123,6 @@ export default function ModalDetalleDocumento({ documento, onClose }) {
                 listaDetalles.map((det, idx) => {
                     const materialObj = det.material_obj || det.material || {};
                     
-                    // Captura segura de código, descripción y unidad de medida
                     const cod = det.codigo_sap || det.codigo_material || materialObj.codigo || "-";
                     const desc = det.nombre_material || det.descripcion || materialObj.nombre || materialObj.descripcion || "Sin descripción";
                     const um = det.unidad_medida || materialObj.unidad_medida || "UND";

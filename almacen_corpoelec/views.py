@@ -1,11 +1,15 @@
 from rest_framework import viewsets, status, filters
+import json
 import os
 import subprocess
 from django.http import JsonResponse
 from pathlib import Path
+from rest_framework.decorators import api_view, action, authentication_classes, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import ProtectedError
 from decimal import Decimal
@@ -22,11 +26,21 @@ from .serializers import (
     ActaEntradaSerializer, CartaRetiroSerializer, CartaDevolucionSerializer, MaterialKardexDetailSerializer, UsuarioSerializer,
     SolicitudLiberacionSerializer, HistorialLiberacionesSerializer
 )
+from .permissions import (
+    UsuarioTokenAuthentication, EsAdministrador, SoloLecturaOAdmin, CrearOAdminEditar,
+    generar_token_usuario
+)
 from django.utils import timezone
 
 class UsuarioViewSet(viewsets.ModelViewSet):
     queryset = Usuario.objects.all()
     serializer_class = UsuarioSerializer
+    authentication_classes = [UsuarioTokenAuthentication]
+
+    def get_permissions(self):
+        if self.action in ['login', 'register']:
+            return [AllowAny()]
+        return [EsAdministrador()]
     
     @action(detail=False, methods=['post'])
     def login(self, request):
@@ -42,6 +56,7 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(usuario)
             data = serializer.data
             data.pop('password', None)
+            data['token'] = generar_token_usuario(usuario)
             return Response(data, status=status.HTTP_200_OK)
         except Usuario.DoesNotExist:
             return Response({'error': 'Credenciales incorrectas'}, 
@@ -63,9 +78,12 @@ class UsuarioViewSet(viewsets.ModelViewSet):
 class MaterialViewSet(viewsets.ModelViewSet):
     queryset = Material.objects.all().order_by('-fecha_ingreso')
     serializer_class = MaterialSerializer
+    authentication_classes = [UsuarioTokenAuthentication]
+    permission_classes = [CrearOAdminEditar]
     filter_backends = [filters.SearchFilter]
     search_fields = ['codigo', 'nombre', 'unidad_medida', 'fecha_ingreso']
 
+    @transaction.atomic
     def perform_create(self, serializer):
         # Guarda el nuevo material (el método save asignará el pag_kardex automático)
         material = serializer.save()
@@ -90,6 +108,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
                 numero_documento="INVENTARIO INICIAL",
                 tipo_movimiento="ENTRADA",
                 destino="O",
+                proyecto=material.proyecto_obra or '',
                 cantidad_entrada=material.stock_obra,
                 cantidad_salida=0,
                 existencias=material.stock_actual,
@@ -113,11 +132,14 @@ class MaterialViewSet(viewsets.ModelViewSet):
 class PersonalViewSet(viewsets.ModelViewSet):
     queryset = Personal.objects.all()
     serializer_class = PersonalSerializer
-
+    authentication_classes = [UsuarioTokenAuthentication]
+    permission_classes = [SoloLecturaOAdmin]
 
 class ActaEntradaViewSet(viewsets.ModelViewSet):
     queryset = ActaEntrada.objects.all()
     serializer_class = ActaEntradaSerializer
+    authentication_classes = [UsuarioTokenAuthentication]
+    permission_classes = [CrearOAdminEditar]
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
@@ -149,9 +171,17 @@ class ActaEntradaViewSet(viewsets.ModelViewSet):
             else:
                 material.stock_mantenimiento += cant
             material.stock_actual = material.stock_mantenimiento + material.stock_obra
-            material.save()
 
             observacion_detalle = item.get('observacion') or item.get('observaciones') or ''
+            proyecto = item.get('proyecto') or item.get('proyecto_obra') or ''
+            if destino == 'O':
+                if not proyecto:
+                    proyecto = observacion_detalle or acta.observaciones or ''
+                material.proyecto_obra = proyecto
+            else:
+                proyecto = ''
+
+            material.save()
 
             # Registrar Movimiento en Kardex
             MovimientoKardex.objects.create(
@@ -160,6 +190,7 @@ class ActaEntradaViewSet(viewsets.ModelViewSet):
                 fecha=acta.fecha_recepcion,
                 tipo_movimiento='ENTRADA',
                 destino=destino,
+                proyecto=proyecto,
                 cantidad_entrada=cant,
                 cantidad_salida=0,
                 existencias=material.stock_actual,
@@ -170,20 +201,35 @@ class ActaEntradaViewSet(viewsets.ModelViewSet):
 class CartaRetiroViewSet(viewsets.ModelViewSet):
     queryset = CartaRetiro.objects.all()
     serializer_class = CartaRetiroSerializer
+    authentication_classes = [UsuarioTokenAuthentication]
+    permission_classes = [CrearOAdminEditar]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         detalles_data = request.data.get('detalles', [])
 
+        if isinstance(detalles_data, str):
+            try:
+                detalles_data = json.loads(detalles_data)
+            except json.JSONDecodeError:
+                raise ValidationError({'error': 'El detalle de materiales no tiene un formato válido.'})
+
         if not detalles_data:
             raise ValidationError({'error': 'Debe incluir al menos un material en el retiro.'})
 
-        solicitante_id = request.data.get('usuario_id') or request.data.get('solicitado_por_id')
+        usuario_autenticado = request.user
+        solicitante_id = getattr(usuario_autenticado, 'pk', None)
         solicitante_nombre = (
-            request.data.get('usuario_nombre')
-            or request.data.get('solicitado_por_nombre')
-            or ''
-        )
+            f"{getattr(usuario_autenticado, 'nombres', '')} "
+            f"{getattr(usuario_autenticado, 'apellidos', '')}"
+        ).strip()
+        if not solicitante_nombre:
+            solicitante_nombre = (
+                request.data.get('usuario_nombre')
+                or request.data.get('solicitado_por_nombre')
+                or ''
+            )
 
         # 1. Validar disponibilidad de stock según el origen (Mantenimiento u Obra).
         # Se acumula por (material, origen) para que varias líneas del mismo material
@@ -223,7 +269,9 @@ class CartaRetiroViewSet(viewsets.ModelViewSet):
                 })
 
         # 2. Guardar la cabecera y los detalles AUTOMÁTICAMENTE mediante el Serializador
-        serializer = self.get_serializer(data=request.data)
+        datos_serializer = request.data.dict() if hasattr(request.data, 'dict') else dict(request.data)
+        datos_serializer['detalles'] = detalles_data
+        serializer = self.get_serializer(data=datos_serializer)
         serializer.is_valid(raise_exception=True)
         carta = serializer.save()
 
@@ -232,10 +280,16 @@ class CartaRetiroViewSet(viewsets.ModelViewSet):
         # 3. Descontar Mantenimiento de inmediato; Obra queda pendiente de aprobación
         for material, cant, item, origen in materiales_procesar:
             if origen == 'O':
+                detalle_retiro = DetalleRetiro.objects.filter(
+                    carta_retiro=carta,
+                    material=material,
+                    origen='O',
+                ).first()
                 SolicitudLiberacion.objects.create(
                     material=material,
                     cantidad=cant,
                     carta_retiro=carta,
+                    detalle_retiro=detalle_retiro,
                     proyecto_origen=(
                         item.get('observacion')
                         or carta.observaciones
@@ -273,14 +327,57 @@ class CartaRetiroViewSet(viewsets.ModelViewSet):
         data['solicitudes_creadas'] = solicitudes_creadas
         return Response(data, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser])
+    def soporte(self, request, pk=None):
+        carta = self.get_object()
+        campos_actualizados = []
+
+        for campo in ('imagen_soporte_1', 'imagen_soporte_2'):
+            archivo = request.FILES.get(campo)
+            if not archivo:
+                continue
+            if not (archivo.content_type or '').startswith('image/'):
+                return Response(
+                    {'error': f'El archivo {campo} debe ser una imagen.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            setattr(carta, campo, archivo)
+            campos_actualizados.append(campo)
+
+        if not campos_actualizados:
+            return Response(
+                {'error': 'Debe adjuntar al menos una imagen de soporte.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        carta.save(update_fields=campos_actualizados)
+        return Response(self.get_serializer(carta).data, status=status.HTTP_200_OK)
+
 
 
 class SolicitudLiberacionViewSet(viewsets.ModelViewSet):
     queryset = SolicitudLiberacion.objects.all().select_related('material', 'carta_retiro')
     serializer_class = SolicitudLiberacionSerializer
+    authentication_classes = [UsuarioTokenAuthentication]
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_permissions(self):
+        if self.action in [
+            'aprobar', 'rechazar', 'create', 'update', 'partial_update', 'destroy',
+        ]:
+            return [EsAdministrador()]
+        return [IsAuthenticated()]
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        usuario = self.request.user
+
+        # El administrador visualiza todas las solicitudes; el usuario normal
+        # únicamente puede consultar las que él mismo generó.
+        if getattr(usuario, 'rol', None) != 'admin':
+            queryset = queryset.filter(solicitado_por_id=usuario.pk)
+
         estado = self.request.query_params.get('estado')
         if estado:
             queryset = queryset.filter(estado=estado.upper())
@@ -290,29 +387,42 @@ class SolicitudLiberacionViewSet(viewsets.ModelViewSet):
         return queryset
 
     def _obtener_administrador(self, request):
-        admin_id = (
-            request.data.get('administrador_id')
-            or request.data.get('usuario_id')
-            or request.data.get('aprobado_por_id')
-        )
-        if not admin_id:
-            raise ValidationError({
-                'error': 'Solo un usuario administrador puede autorizar liberaciones.'
-            })
-
-        admin = Usuario.objects.filter(pk=admin_id, rol='admin').first()
-        if not admin:
-            raise ValidationError({
-                'error': 'El usuario no existe o no posee rol de administrador.'
-            })
+        admin = request.user
+        if not admin or getattr(admin, 'rol', None) != 'admin':
+            raise PermissionDenied(
+                'Solo un usuario administrador puede autorizar liberaciones.'
+            )
 
         nombre = f"{admin.nombres} {admin.apellidos}".strip()
         return admin, nombre
+
+    @action(detail=False, methods=['get'])
+    def resumen(self, request):
+        queryset = self.get_queryset()
+        return Response({
+            'pendientes': queryset.filter(estado='PENDIENTE').count(),
+            'aprobadas': queryset.filter(estado='APROBADA').count(),
+            'rechazadas': queryset.filter(estado='RECHAZADA').count(),
+            'total': queryset.count(),
+        })
 
     @action(detail=True, methods=['post'])
     @transaction.atomic
     def aprobar(self, request, pk=None):
         admin, admin_nombre = self._obtener_administrador(request)
+        imagen_soporte = request.FILES.get('imagen_soporte')
+
+        if not imagen_soporte:
+            return Response(
+                {'error': 'Debe adjuntar una imagen de soporte para aprobar la liberación.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not (imagen_soporte.content_type or '').startswith('image/'):
+            return Response(
+                {'error': 'El archivo adjunto debe ser una imagen.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             solicitud = SolicitudLiberacion.objects.select_for_update().get(pk=pk)
@@ -341,6 +451,8 @@ class SolicitudLiberacionViewSet(viewsets.ModelViewSet):
 
         material.stock_obra -= cantidad
         material.stock_actual = material.stock_mantenimiento + material.stock_obra
+        if material.stock_obra <= 0:
+            material.proyecto_obra = ''
         material.save()
 
         numero_documento = (
@@ -348,6 +460,7 @@ class SolicitudLiberacionViewSet(viewsets.ModelViewSet):
             if solicitud.carta_retiro
             else f"LIB-{solicitud.id:05d}"
         )
+        proyecto = solicitud.proyecto_origen or motivo
 
         MovimientoKardex.objects.create(
             material=material,
@@ -355,6 +468,7 @@ class SolicitudLiberacionViewSet(viewsets.ModelViewSet):
             fecha=timezone.now().date(),
             tipo_movimiento='SALIDA',
             destino='O',
+            proyecto=proyecto,
             cantidad_entrada=0,
             cantidad_salida=cantidad,
             existencias=material.stock_actual,
@@ -364,11 +478,12 @@ class SolicitudLiberacionViewSet(viewsets.ModelViewSet):
         HistorialLiberaciones.objects.create(
             material=material,
             cantidad=cantidad,
-            proyecto_origen=solicitud.proyecto_origen or motivo,
+            proyecto_origen=proyecto,
             administrador_id=admin.pk,
             administrador_nombre=admin_nombre,
             motivo=motivo,
             numero_documento=numero_documento,
+            imagen_soporte=imagen_soporte,
             solicitud=solicitud,
         )
 
@@ -409,6 +524,8 @@ class SolicitudLiberacionViewSet(viewsets.ModelViewSet):
 class HistorialLiberacionesViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = HistorialLiberaciones.objects.all().select_related('material')
     serializer_class = HistorialLiberacionesSerializer
+    authentication_classes = [UsuarioTokenAuthentication]
+    permission_classes = [EsAdministrador]
     filter_backends = [filters.SearchFilter]
     search_fields = ['material__codigo', 'material__nombre', 'proyecto_origen', 'administrador_nombre']
 
@@ -416,6 +533,9 @@ class HistorialLiberacionesViewSet(viewsets.ReadOnlyModelViewSet):
 class CartaDevolucionViewSet(viewsets.ModelViewSet):
     queryset = CartaDevolucion.objects.all()
     serializer_class = CartaDevolucionSerializer
+    authentication_classes = [UsuarioTokenAuthentication]
+    permission_classes = [CrearOAdminEditar]
+
 
 
 
@@ -450,6 +570,8 @@ class CierreAnualViewSet(viewsets.ModelViewSet):
 
 
 @api_view(['POST'])
+@authentication_classes([UsuarioTokenAuthentication])
+@permission_classes([IsAuthenticated])
 def generar_kardex_excel_directo(request):
     data = request.data
     info_raw = data.get('info_producto', {})
@@ -531,6 +653,8 @@ def formatear_personal(p):
 
 
 @api_view(['GET', 'POST'])
+@authentication_classes([UsuarioTokenAuthentication])
+@permission_classes([IsAuthenticated])
 def descargar_kardex_excel(request, codigo_retiro=None):
     if request.method == 'POST':
         data = request.data
@@ -636,6 +760,9 @@ def registrar_ingreso_acta(numero_acta, fecha_ingreso, items_materiales, observa
 
         material.stock_actual = material.stock_mantenimiento + material.stock_obra
         nueva_existencia = material.stock_actual
+        proyecto = item.get('proyecto', '') if destino == 'O' else ''
+        if destino == 'O' and proyecto:
+            material.proyecto_obra = proyecto
         material.save()
 
         # Generar fila automática en el Kardex del material
@@ -645,6 +772,7 @@ def registrar_ingreso_acta(numero_acta, fecha_ingreso, items_materiales, observa
             fecha=fecha_ingreso,
             tipo_movimiento='ENTRADA',
             destino=destino,
+            proyecto=proyecto,
             cantidad_entrada=item['cantidad'],
             cantidad_salida=0,
             existencias=nueva_existencia,
@@ -675,6 +803,9 @@ def registrar_salida_carta_rd(numero_carta_rd, fecha_salida, items_materiales, o
 
         material.stock_actual = material.stock_mantenimiento + material.stock_obra
         nueva_existencia = material.stock_actual
+        proyecto = item.get('proyecto', '') if destino == 'O' else ''
+        if destino == 'O' and material.stock_obra <= 0:
+            material.proyecto_obra = ''
         material.save()
 
         # Generar fila de salida automática
@@ -684,6 +815,7 @@ def registrar_salida_carta_rd(numero_carta_rd, fecha_salida, items_materiales, o
             fecha=fecha_salida,
             tipo_movimiento='SALIDA',
             destino=destino,
+            proyecto=proyecto,
             cantidad_entrada=0,
             cantidad_salida=item['cantidad'],
             existencias=nueva_existencia,
@@ -692,7 +824,10 @@ def registrar_salida_carta_rd(numero_carta_rd, fecha_salida, items_materiales, o
 
 
 @api_view(['GET'])
+@authentication_classes([UsuarioTokenAuthentication])
+@permission_classes([IsAuthenticated])
 def obtener_kardex_material(request, material_id):
+    
     try:
         material = Material.objects.get(pk=material_id)
         serializer = MaterialKardexDetailSerializer(material)

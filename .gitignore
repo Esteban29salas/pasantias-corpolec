@@ -1,0 +1,17 @@
+# Dependencias y entornos virtuales
+node_modules/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Archivos de entorno y configuración sensible
+.env
+db.sqlite3
+
+# Compilación de React
+dist/
+build/
+
+# Archivos multimedia subidos por usuarios
+media/

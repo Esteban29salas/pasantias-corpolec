@@ -86,10 +86,6 @@ const Login = ({ onLoginSuccess, onSwitchToRegister }) => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const hasErrors = () => {
-    return Object.values(errors).some(error => error && error.trim() !== '');
-  };
-
   const isFormValid = () => {
     return formData.email.trim() && formData.password.trim() && 
            emailRegex.test(formData.email.trim()) && 

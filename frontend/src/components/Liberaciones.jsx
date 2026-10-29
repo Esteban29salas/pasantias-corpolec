@@ -17,6 +17,10 @@ export default function Liberaciones({ isOpen, onClose, user, alCambiarStock }) 
   const [cargando, setCargando] = useState(true);
   const [procesando, setProcesando] = useState(null);
   const [error, setError] = useState("");
+  const [solicitudAprobando, setSolicitudAprobando] = useState(null);
+  const [motivoAprobacion, setMotivoAprobacion] = useState("");
+  const [imagenSoporte, setImagenSoporte] = useState(null);
+  const [errorAprobacion, setErrorAprobacion] = useState("");
 
   const isAdmin = user?.rol === "admin";
 
@@ -85,9 +89,67 @@ export default function Liberaciones({ isOpen, onClose, user, alCambiarStock }) 
       }
 
       await cargarDatos();
+      window.dispatchEvent(new Event("liberaciones-actualizadas"));
       if (alCambiarStock) alCambiarStock();
     } catch (err) {
       setError(err.message);
+    } finally {
+      setProcesando(null);
+    }
+  };
+
+  const abrirAprobacion = (solicitud) => {
+    setSolicitudAprobando(solicitud);
+    setMotivoAprobacion(solicitud.motivo || "");
+    setImagenSoporte(null);
+    setErrorAprobacion("");
+  };
+
+  const cerrarAprobacion = () => {
+    if (procesando) return;
+    setSolicitudAprobando(null);
+    setMotivoAprobacion("");
+    setImagenSoporte(null);
+    setErrorAprobacion("");
+  };
+
+  const confirmarAprobacion = async () => {
+    if (!solicitudAprobando) return;
+
+    if (!imagenSoporte) {
+      setErrorAprobacion("Debe adjuntar una imagen de soporte para aprobar la liberación.");
+      return;
+    }
+
+    setProcesando(solicitudAprobando.id);
+    setErrorAprobacion("");
+
+    try {
+      const formData = new FormData();
+      formData.append("administrador_id", user?.id ?? "");
+      formData.append("administrador_nombre", user?.nombreCompleto ?? "");
+      formData.append("motivo", motivoAprobacion);
+      formData.append("imagen_soporte", imagenSoporte);
+
+      const res = await fetch(`${API}/liberaciones/${solicitudAprobando.id}/aprobar/`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data.error || data.detail || "No se pudo aprobar la solicitud.");
+      }
+
+      await cargarDatos();
+      window.dispatchEvent(new Event("liberaciones-actualizadas"));
+      if (alCambiarStock) alCambiarStock();
+      setSolicitudAprobando(null);
+      setMotivoAprobacion("");
+      setImagenSoporte(null);
+    } catch (err) {
+      setErrorAprobacion(err.message);
     } finally {
       setProcesando(null);
     }
@@ -203,7 +265,7 @@ export default function Liberaciones({ isOpen, onClose, user, alCambiarStock }) 
                             className="btn-success"
                             style={{ padding: "4px 8px", fontSize: "12px", marginRight: "6px" }}
                             disabled={!isAdmin || procesando === solicitud.id}
-                            onClick={() => resolverSolicitud(solicitud, "aprobar")}
+                            onClick={() => abrirAprobacion(solicitud)}
                           >
                             ✔ Aprobar
                           </button>
@@ -236,13 +298,14 @@ export default function Liberaciones({ isOpen, onClose, user, alCambiarStock }) 
                     <th>Motivo / Observación</th>
                     <th>Documento</th>
                     <th>Fecha y hora</th>
+                    <th>Soporte</th>
                   </tr>
                 </thead>
                 <tbody>
                   {historial.length === 0 ? (
                     <tr>
-                      <td colSpan="8" className="table-empty-cell">
-                        Aún no existen liberaciones de obra registradas.
+                      <td colSpan="9" className="table-empty-cell">
+                        Aǧn no existen liberaciones de obra registradas.
                       </td>
                     </tr>
                   ) : (
@@ -258,6 +321,15 @@ export default function Liberaciones({ isOpen, onClose, user, alCambiarStock }) 
                         <td>{item.motivo || "-"}</td>
                         <td>{item.numero_documento || "-"}</td>
                         <td>{formatoFecha(item.fecha_hora)}</td>
+                        <td style={{ textAlign: "center" }}>
+                          {item.imagen_soporte ? (
+                            <a href={item.imagen_soporte} target="_blank" rel="noreferrer">
+                              Ver imagen
+                            </a>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
                       </tr>
                     ))
                   )}
@@ -273,6 +345,78 @@ export default function Liberaciones({ isOpen, onClose, user, alCambiarStock }) 
           </button>
         </div>
       </div>
+
+      {solicitudAprobando && (
+        <div className="modal-overlay" style={{ zIndex: 1200 }}>
+          <div className="modal-content" style={{ maxWidth: "520px", width: "92%" }}>
+            <div className="modal-header">
+              <div className="modal-header-info">
+                <div>
+                  <h2 className="modal-title">Aprobar liberación</h2>
+                  <span className="modal-subtitle">
+                    {solicitudAprobando.material_codigo} - {solicitudAprobando.material_nombre}
+                  </span>
+                </div>
+              </div>
+              <button type="button" className="btn-close-modal" onClick={cerrarAprobacion}>
+                X
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ padding: "16px" }}>
+              <div style={{ marginBottom: "12px", fontSize: "13px" }}>
+                Se liberarán <strong>{solicitudAprobando.cantidad} {solicitudAprobando.unidad_medida}</strong>
+                {" "}desde el Stock Obra.
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Motivo / observación</label>
+                <textarea
+                  className="form-input"
+                  rows="3"
+                  value={motivoAprobacion}
+                  onChange={(e) => setMotivoAprobacion(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">
+                  Imagen de soporte <span className="required-asterisk">*</span>
+                </label>
+                <input
+                  type="file"
+                  className="form-input"
+                  accept="image/*"
+                  onChange={(e) => setImagenSoporte(e.target.files?.[0] || null)}
+                />
+              </div>
+
+              {errorAprobacion && (
+                <div
+                  style={{
+                    background: "#fee2e2",
+                    color: "#991b1b",
+                    padding: "8px 12px",
+                    borderRadius: "6px",
+                    fontSize: "13px",
+                  }}
+                >
+                  {errorAprobacion}
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              <button type="button" className="btn-secondary" onClick={cerrarAprobacion} disabled={Boolean(procesando)}>
+                Cancelar
+              </button>
+              <button type="button" className="btn-success" onClick={confirmarAprobacion} disabled={Boolean(procesando)}>
+                {procesando ? "Procesando..." : "Confirmar aprobación"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

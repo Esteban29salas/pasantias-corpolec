@@ -34,6 +34,33 @@ export default function KardexView({ materialId }) {
         </div>
       </div>
 
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '10px',
+          marginBottom: '10px',
+          padding: '10px 12px',
+          borderRadius: '8px',
+          background: 'var(--bg-secondary, #f8fafc)',
+          border: '1px solid var(--border-color, #e2e8f0)',
+          fontSize: '13px',
+        }}
+      >
+        <span style={{ color: '#0f766e', fontWeight: '700' }}>
+          Mantenimiento: {kardexData.stock_mantenimiento ?? 0}
+        </span>
+        <span style={{ color: '#b45309', fontWeight: '700' }}>
+          Obra: {kardexData.stock_obra ?? 0}
+          {Number(kardexData.stock_obra || 0) > 0 && kardexData.proyecto_obra
+            ? ` (${kardexData.proyecto_obra})`
+            : ''}
+        </span>
+        <span style={{ fontWeight: '700' }}>
+          Total: {kardexData.stock_total ?? kardexData.stock_actual ?? 0}
+        </span>
+      </div>
+
       {/* Tabla del Historial Kardex */}
       <div className="table-wrapper" style={{ marginTop: '20px' }}>
         <table className="custom-table w-full text-sm text-left">
@@ -41,6 +68,7 @@ export default function KardexView({ materialId }) {
             <tr>
               <th rowSpan="2">NÚMERO DOCUMENTO</th>
               <th rowSpan="2">FECHA</th>
+              <th rowSpan="2">DESTINO / PROYECTO</th>
               <th colSpan="2" style={{ textAlign: 'center' }}>ENTRADA</th>
               <th colSpan="2" style={{ textAlign: 'center' }}>SALIDAS</th>
               <th colSpan="2" style={{ textAlign: 'center' }}>EXISTENCIAS</th>
@@ -58,9 +86,32 @@ export default function KardexView({ materialId }) {
           <tbody>
             {kardexData.historial_kardex && kardexData.historial_kardex.length > 0 ? (
               kardexData.historial_kardex.map((mov, idx) => (
-                <tr key={mov.id || idx}>
+                <tr
+                  key={mov.id || idx}
+                  style={mov.destino === 'O' ? { background: '#fffbeb' } : undefined}
+                >
                   <td><strong>{mov.numero_documento}</strong></td>
                   <td>{mov.fecha}</td>
+                  <td>
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        padding: '2px 8px',
+                        borderRadius: '10px',
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        color: '#fff',
+                        background: mov.destino === 'O' ? '#d97706' : '#0f766e',
+                      }}
+                    >
+                      {mov.destino === 'O' ? 'OBRA' : 'MANTENIMIENTO'}
+                    </span>
+                    {mov.destino === 'O' && (
+                      <div style={{ fontSize: '11px', color: '#92400e', marginTop: '3px' }}>
+                        {mov.proyecto || 'Sin proyecto indicado'}
+                      </div>
+                    )}
+                  </td>
                   
                   {/* Entrada M / O */}
                   <td>{mov.destino === 'M' && mov.cantidad_entrada > 0 ? mov.cantidad_entrada : ''}</td>
@@ -79,7 +130,7 @@ export default function KardexView({ materialId }) {
               ))
             ) : (
               <tr>
-                <td colSpan="9" className="text-center py-4" style={{ textAlign: 'center' }}>
+                <td colSpan="10" className="text-center py-4" style={{ textAlign: 'center' }}>
                   No hay movimientos registrados para este material
                 </td>
               </tr>

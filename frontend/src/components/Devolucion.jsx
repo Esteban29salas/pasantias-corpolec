@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { RotateCcw, Maximize2, Minimize2, X, FileSpreadsheet, FolderOpen, ClipboardList, Package, Save, ChevronDown, FileText } from "lucide-react";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -92,9 +93,7 @@ export default function ModalDevolucion({ isOpen, onClose, alGuardarExito }) {
     return mensaje;
   };
 
-
-
-const handleSeleccionarCarta = (codigo) => {
+  const handleSeleccionarCarta = (codigo) => {
     setCartaSeleccionadaId(codigo);
     validarCampoCabecera("codigo_retiro", codigo);
 
@@ -160,7 +159,6 @@ const handleSeleccionarCarta = (codigo) => {
 
       setDetalles(nuevosDetalles);
 
-      // 🛑 INYECCIÓN DE ERROR INLINE AUTOMÁTICO
       const erroresDetalles = nuevosDetalles.map((item) => {
         if (item.disponible_devolucion === 0) {
           return { nueva_devolucion: `Material devuelto en su totalidad (${item.cantidad_devuelta} de ${item.cantidad_despachada}).` };
@@ -177,6 +175,7 @@ const handleSeleccionarCarta = (codigo) => {
       setErrors((prev) => ({ ...prev, detalles: [] }));
     }
   };
+
   const validarCampoDetalle = (index, campo, valor, itemActual) => {
     let mensaje = "";
     if (campo === "nueva_devolucion") {
@@ -186,7 +185,7 @@ const handleSeleccionarCarta = (codigo) => {
         : Number(itemActual.cantidad_despachada || 0);
 
       if (isNaN(cant) || cant <= 0) {
-        mensaje = "La cantidad a devolver debe ser mayor a 0."; // 👈 Prohíbe el 0
+        mensaje = "La cantidad a devolver debe ser mayor a 0.";
       } else if (cant > limiteMaximo) {
         mensaje = `Máximo disponible para devolver: ${limiteMaximo}`;
       }
@@ -199,6 +198,7 @@ const handleSeleccionarCarta = (codigo) => {
     });
     return mensaje;
   };
+
   const handleCabeceraChange = (campo, valor) => {
     setCabecera((prev) => ({ ...prev, [campo]: valor }));
     validarCampoCabecera(campo, valor);
@@ -228,8 +228,6 @@ const handleSeleccionarCarta = (codigo) => {
           alert("El archivo Excel está vacío.");
           return;
         }
-
-
 
         let headerIndex = rows.findIndex((row) =>
           row.some((cell) => {
@@ -287,7 +285,6 @@ const handleSeleccionarCarta = (codigo) => {
     reader.readAsBinaryString(file);
   };
 
-  // --- EXPORTACIÓN EXCEL ---
   const handleExportExcel = async () => {
     try {
       const payload = {
@@ -319,7 +316,6 @@ const handleSeleccionarCarta = (codigo) => {
     }
   };
 
-  // --- EXPORTACIÓN PDF ---
   const handleExportPDF = () => {
     try {
       const doc = new jsPDF("p", "mm", "a4");
@@ -429,7 +425,7 @@ const handleSeleccionarCarta = (codigo) => {
       recibido_por: cabecera.recibido_por,
       observaciones: cabecera.observaciones_devolucion,
       detalles: itemsADevolver.map((item) => ({
-        material: item.material_id, // ID o código que relaciona directamente con el material
+        material: item.material_id,
         material_codigo: item.codigo_sap,
         cantidad: parseInt(item.nueva_devolucion) || 0,
         cantidad_devuelta: parseInt(item.nueva_devolucion) || 0,
@@ -473,7 +469,7 @@ const handleSeleccionarCarta = (codigo) => {
         {/* BARRA SUPERIOR ARRASTRABLE Y CONTROLES DE VENTANA */}
         <div onMouseDown={!esMaximizado ? iniciarArrastre : undefined} className="modal-header">
           <div className="modal-header-info">
-            <span className="modal-header-icon">↩️</span>
+            <span className="modal-header-icon"><RotateCcw size={22} /></span>
             <div>
               <h2 className="modal-title">Devolución y Reingreso de Materiales</h2>
               <span className="modal-subtitle">
@@ -488,10 +484,10 @@ const handleSeleccionarCarta = (codigo) => {
               className="btn-header-action"
               title={esMaximizado ? "Restaurar tamaño" : "Maximizar ventana"}
             >
-              {esMaximizado ? "🗗" : "🗖"}
+              {esMaximizado ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
             </button>
             <button type="button" onClick={onClose} className="btn-close-modal" title="Cerrar">
-              ✕
+              <X size={18} />
             </button>
           </div>
         </div>
@@ -512,8 +508,8 @@ const handleSeleccionarCarta = (codigo) => {
             }}
           >
             <div>
-              <strong style={{ fontSize: "13px", color: "#065f46", display: "block" }}>
-                📊 Importar Datos desde Excel / CSV
+              <strong style={{ fontSize: "13px", color: "#065f46", display: "flex", alignItems: "center", gap: "6px" }}>
+                <FileSpreadsheet size={16} /> Importar Datos desde Excel / CSV
               </strong>
               <span style={{ fontSize: "11px", color: "#047857" }}>
                 Cargue un archivo para auto-completar las cantidades a devolver.
@@ -533,7 +529,7 @@ const handleSeleccionarCarta = (codigo) => {
                 gap: "6px",
               }}
             >
-              📁 Cargar Excel / CSV
+              <FolderOpen size={16} /> Cargar Excel / CSV
               <input
                 type="file"
                 accept=".xlsx, .xls, .csv"
@@ -546,8 +542,8 @@ const handleSeleccionarCarta = (codigo) => {
           <form ref={formRef} onSubmit={handleSubmit} noValidate>
             {/* INFORMACIÓN GENERAL */}
             <div className="card-container bg-slate-50" style={{ padding: "15px", marginBottom: "20px" }}>
-              <h3 className="card-title" style={{ textAlign: "center", color: "#059669", marginBottom: "12px" }}>
-                📋 Información General de Devolución
+              <h3 className="card-title" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", color: "#059669", marginBottom: "12px" }}>
+                <ClipboardList size={18} /> Información General de Devolución
               </h3>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "15px" }}>
@@ -562,7 +558,6 @@ const handleSeleccionarCarta = (codigo) => {
                   >
                     <option value="">Seleccione Acta...</option>
                     {cartasRetiroList.map((c) => {
-                      // Extraemos la fecha de cualquiera de los campos posibles que envíe el backend
                       const fechaCruda = c.fecha_hora || c.fecha || "";
                       const fechaFormateada = fechaCruda ? fechaCruda.split("T")[0] : "Sin fecha";
                       
@@ -610,8 +605,8 @@ const handleSeleccionarCarta = (codigo) => {
 
             {/* TABLA DE MATERIALES */}
             <div className="card-container" style={{ marginBottom: "20px" }}>
-              <h3 className="card-title-sm" style={{ textAlign: "center", color: "#059669", marginBottom: "10px" }}>
-                📦 Cantidades a Reingresar al Inventario
+              <h3 className="card-title-sm" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", color: "#059669", marginBottom: "10px" }}>
+                <Package size={18} /> Cantidades a Reingresar al Inventario
               </h3>
 
               {detalles.length === 0 ? (
@@ -626,7 +621,7 @@ const handleSeleccionarCarta = (codigo) => {
                     fontSize: "13px",
                   }}
                 >
-                  Seleccione un Acta de Retiro arriba o presione "📁 Cargar Excel / CSV" para cargar los items.
+                  Seleccione un Acta de Retiro arriba o presione "Cargar Excel / CSV" para cargar los items.
                 </div>
               ) : (
                 <div className="table-wrapper">
@@ -663,13 +658,11 @@ const handleSeleccionarCarta = (codigo) => {
                                 onBlur={(e) => validarCampoDetalle(idx, "nueva_devolucion", e.target.value, item)}
                                 className={`form-input text-center font-bold ${errDetalle.nueva_devolucion ? "input-error" : ""}`}
                               />
-                              {/* 👇 ESTO ES LO QUE MUESTRA EL MENSAJE DE ERROR INLINE DEBAJO DEL INPUT */}
                               {errDetalle.nueva_devolucion && (
                                 <span className="error-text" style={{ color: "#dc2626", fontSize: "11px", display: "block", marginTop: "4px" }}>
                                   {errDetalle.nueva_devolucion}
                                 </span>
                               )}
-                            
                             </td>
                             <td>
                               <select
@@ -775,7 +768,7 @@ const handleSeleccionarCarta = (codigo) => {
                   onClick={() => setMostrarOpcionesExportar(!mostrarOpcionesExportar)}
                   disabled={detalles.length === 0}
                 >
-                  💾 Registrar y Exportar ▼
+                  <Save size={16} /> Registrar y Exportar <ChevronDown size={14} />
                 </button>
 
                 {mostrarOpcionesExportar && (
@@ -785,7 +778,7 @@ const handleSeleccionarCarta = (codigo) => {
                       className="dropdown-item"
                       onClick={() => handleGuardarYExportar("guardar")}
                     >
-                      💾 Solo Guardar
+                      <Save size={15} /> Solo Guardar
                     </button>
                     <div className="dropdown-divider" />
                     <button
@@ -793,14 +786,14 @@ const handleSeleccionarCarta = (codigo) => {
                       className="dropdown-item"
                       onClick={() => handleGuardarYExportar("excel")}
                     >
-                      📊 Exportar en Excel
+                      <FileSpreadsheet size={15} /> Exportar en Excel
                     </button>
                     <button
                       type="button"
                       className="dropdown-item"
                       onClick={() => handleGuardarYExportar("pdf")}
                     >
-                      📄 Exportar en PDF
+                      <FileText size={15} /> Exportar en PDF
                     </button>
                   </div>
                 )}

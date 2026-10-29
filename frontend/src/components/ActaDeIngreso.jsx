@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Package, Maximize2, Minimize2, X, Upload, Save, ChevronDown, FileSpreadsheet, FileText, Trash2, Plus } from "lucide-react";
 import "../App.css";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
@@ -10,6 +11,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
   const CECO_CODIGO = "E350203";
   const CECO_NOMBRE = "SERVICIOS TIPO C LA FRIA";
   const ESTRUCTU_DEFAULT = "40001445";
+  const UNIDADES_MEDIDA = ["PZA", "UND", "MTS", "KM", "CM", "KG", "GR", "TON"];
 
   // Estado para maximizar la ventana
   const [esMaximizado, setEsMaximizado] = useState(false);
@@ -43,6 +45,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
       observacion: "",
       pag: "1",
       destino: "M",
+      proyecto: "",
     },
   ]);
 
@@ -53,6 +56,17 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
 
   const [materialList, setMaterialList] = useState([]);
   const [personalList, setPersonalList] = useState([]);
+
+  const [modalNuevoMaterial, setModalNuevoMaterial] = useState(false);
+  const [filaNuevoMaterial, setFilaNuevoMaterial] = useState(null);
+  const [guardandoNuevoMaterial, setGuardandoNuevoMaterial] = useState(false);
+  const [errorsNuevoMaterial, setErrorsNuevoMaterial] = useState({});
+  const [nuevoMaterial, setNuevoMaterial] = useState({
+    codigo: "",
+    nombre: "",
+    descripcion: "",
+    unidad_medida: "UND",
+  });
 
   const printRef = useRef(null);
 
@@ -157,7 +171,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
     return mensaje;
   };
 
-  const validarCampoDetalle = (index, campo, valor) => {
+  const validarCampoDetalle = (index, campo, valor, itemActual = null) => {
     let mensaje = "";
 
     if (campo === "material" && !valor) {
@@ -170,6 +184,14 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
 
     if (campo === "observacion" && !String(valor).trim()) {
       mensaje = "La observación es requerida.";
+    }
+
+    if (campo === "proyecto" && itemActual?.destino === "O" && !String(valor).trim()) {
+      mensaje = "Indique el proyecto o calle de destino para el Stock Obra.";
+    }
+
+    if (campo === "destino" && valor === "O" && !String(itemActual?.proyecto || "").trim()) {
+      mensaje = "Indique el proyecto o calle de destino para el Stock Obra.";
     }
 
     if (campo === "cantidad_despachada") {
@@ -202,22 +224,168 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
     validarCampoCabecera(campo, valor);
   };
 
+  const abrirModalNuevoMaterial = (index) => {
+    const fila = detalles[index] || {};
+    setFilaNuevoMaterial(index);
+    setNuevoMaterial({
+      codigo: fila.material || "",
+      nombre: "",
+      descripcion: fila.descripcion || "",
+      unidad_medida: fila.unidad_medida || "UND",
+    });
+    setErrorsNuevoMaterial({});
+    setModalNuevoMaterial(true);
+  };
+
+  const handleNuevoMaterialChange = (campo, valor) => {
+    setNuevoMaterial((prev) => ({ ...prev, [campo]: valor }));
+    setErrorsNuevoMaterial((prev) => ({ ...prev, [campo]: "" }));
+  };
+
+  const validarNuevoMaterial = () => {
+    const errores = {};
+    const codigo = String(nuevoMaterial.codigo || "").trim();
+    const nombre = String(nuevoMaterial.nombre || "").trim();
+    const descripcion = String(nuevoMaterial.descripcion || "").trim();
+    const textoSinEspacios = descripcion.replace(/\./g, "").replace(/\s/g, "");
+
+    if (!codigo) {
+      errores.codigo = "El Código SAP es requerido.";
+    } else if (!/^\d{1,10}$/.test(codigo)) {
+      errores.codigo = "El Código SAP debe contener solo números (máximo 10).";
+    }
+
+    if (!nombre) {
+      errores.nombre = "El nombre del material es requerido.";
+    }
+
+    if (!descripcion) {
+      errores.descripcion = "La descripción es requerida.";
+    } else if (textoSinEspacios.length < 10 || textoSinEspacios.length > 500) {
+      errores.descripcion = "La descripción debe tener entre 10 y 500 caracteres útiles.";
+    }
+
+    if (!nuevoMaterial.unidad_medida) {
+      errores.unidad_medida = "Seleccione una unidad de medida.";
+    }
+
+    setErrorsNuevoMaterial(errores);
+    return Object.keys(errores).length === 0;
+  };
+
+  const manejarCrearMaterialRapido = async (e) => {
+    e.preventDefault();
+
+    if (filaNuevoMaterial === null || !validarNuevoMaterial()) {
+      return;
+    }
+
+    const datosMaterial = {
+      codigo: String(nuevoMaterial.codigo).trim(),
+      nombre: String(nuevoMaterial.nombre).trim(),
+      descripcion: String(nuevoMaterial.descripcion).trim(),
+      unidad_medida: String(nuevoMaterial.unidad_medida).toUpperCase(),
+      stock_mantenimiento: 0,
+      stock_obra: 0,
+      proyecto_obra: "",
+    };
+
+    setGuardandoNuevoMaterial(true);
+
+    try {
+      const res = await fetch("http://localhost:8000/api/materiales/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(datosMaterial),
+      });
+
+      const respuestaTexto = await res.text();
+      let data = null;
+      try {
+        data = JSON.parse(respuestaTexto);
+      } catch {
+        data = respuestaTexto;
+      }
+
+      if (!res.ok) {
+        if (data && typeof data === "object") {
+          setErrorsNuevoMaterial(data);
+        } else {
+          alert("Error al crear el material: " + data);
+        }
+        return;
+      }
+
+      const materialCreado = data && typeof data === "object" ? data : datosMaterial;
+
+      setMaterialList((prev) => {
+        const sinDuplicados = prev.filter(
+          (m) => String(m.codigo) !== String(materialCreado.codigo)
+        );
+        return [...sinDuplicados, materialCreado].sort((a, b) =>
+          String(a.codigo).localeCompare(String(b.codigo))
+        );
+      });
+
+      setDetalles((prev) =>
+        prev.map((item, index) =>
+          index === filaNuevoMaterial
+            ? {
+                ...item,
+                material: materialCreado.codigo,
+                descripcion: materialCreado.descripcion || materialCreado.nombre || item.descripcion,
+                unidad_medida: materialCreado.unidad_medida || item.unidad_medida,
+                pag: materialCreado.pag_kardex ? String(materialCreado.pag_kardex) : item.pag,
+              }
+            : item
+        )
+      );
+
+      setErrors((prev) => {
+        const nuevosErrores = [...(prev.detalles || [])];
+        nuevosErrores[filaNuevoMaterial] = {
+          ...nuevosErrores[filaNuevoMaterial],
+          material: "",
+          descripcion: "",
+        };
+        return { ...prev, detalles: nuevosErrores };
+      });
+
+      setModalNuevoMaterial(false);
+      setFilaNuevoMaterial(null);
+      if (alGuardarExito) alGuardarExito();
+      alert(`Material ${materialCreado.codigo} creado y seleccionado en el acta.`);
+    } catch (error) {
+      console.error("Error al crear material desde el acta:", error);
+      alert("Error de conexión al crear el material.");
+    } finally {
+      setGuardandoNuevoMaterial(false);
+    }
+  };
+
   const handleChangeDetalle = (index, campo, valor) => {
     const nuevosDetalles = [...detalles];
     nuevosDetalles[index][campo] = valor;
+
+    if (campo === "destino" && valor === "M") {
+      nuevosDetalles[index].proyecto = "";
+    }
 
     if (campo === "material") {
       const matEncontrado = materialList.find((m) => String(m.codigo) === String(valor));
       if (matEncontrado) {
         nuevosDetalles[index].descripcion = matEncontrado.descripcion || matEncontrado.nombre || "";
         nuevosDetalles[index].unidad_medida = matEncontrado.unidad_medida || "UND";
-        // Asignación automática del folio/página del Kardex si el material lo posee
         nuevosDetalles[index].pag = matEncontrado.pag_kardex ? String(matEncontrado.pag_kardex) : "1";
       }
     }
 
     setDetalles(nuevosDetalles);
-    validarCampoDetalle(index, campo, valor);
+    validarCampoDetalle(index, campo, valor, nuevosDetalles[index]);
+
+    if (campo === "destino") {
+      validarCampoDetalle(index, "proyecto", nuevosDetalles[index].proyecto, nuevosDetalles[index]);
+    }
   };
 
   const agregarFila = () => {
@@ -233,6 +401,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
         observacion: "",
         pag: "1",
         destino: "M",
+        proyecto: "",
       },
     ]);
     setErrors((prev) => ({
@@ -279,6 +448,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
           const pagina = String(row["Pág"] || "1").trim();
           const destinoRaw = String(row["Destino"] || row["Origen"] || "M").trim().toUpperCase();
           const destino = destinoRaw.startsWith("O") ? "O" : "M";
+          const proyecto = String(row["Proyecto"] || row["Calle"] || row["Proyecto / Calle"] || "").trim();
 
           return {
             material: codSap,
@@ -290,6 +460,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
             observacion: obs,
             pag: pagina,
             destino,
+            proyecto,
           };
         });
 
@@ -309,7 +480,6 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
   };
 
   // --- EXPORTACIÓN ---
-// --- EXPORTACIÓN ---
   const handleExportExcel = async () => {
     try {
       const payload = {
@@ -508,6 +678,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
         observacion: "",
         pag: "1",
         destino: "M",
+        proyecto: "",
       },
     ]);
 
@@ -545,12 +716,13 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
     if (errActa || errFecha || errObs || errEntregado || errRecibido) esValido = false;
 
     detalles.forEach((item, index) => {
-      const errMat = validarCampoDetalle(index, "material", item.material);
-      const errDesc = validarCampoDetalle(index, "descripcion", item.descripcion);
-      const errCant = validarCampoDetalle(index, "cantidad_despachada", item.cantidad_despachada);
-      const errObsMat = validarCampoDetalle(index, "observacion", item.observacion);
+      const errMat = validarCampoDetalle(index, "material", item.material, item);
+      const errDesc = validarCampoDetalle(index, "descripcion", item.descripcion, item);
+      const errCant = validarCampoDetalle(index, "cantidad_despachada", item.cantidad_despachada, item);
+      const errObsMat = validarCampoDetalle(index, "observacion", item.observacion, item);
+      const errProyecto = validarCampoDetalle(index, "proyecto", item.proyecto, item);
 
-      if (errMat || errDesc || errCant || errObsMat) esValido = false;
+      if (errMat || errDesc || errCant || errObsMat || errProyecto) esValido = false;
     });
 
     return esValido;
@@ -579,6 +751,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
         estado: item.condicion || "OPERATIVO",
         observacion: item.observacion,
         destino: item.destino || "M",
+        proyecto: item.destino === "O" ? (item.proyecto || item.observacion || "") : "",
       })),
     };
 
@@ -633,7 +806,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
         {/* BARRA SUPERIOR ARRASTRABLE Y CON BOTÓN DE MAXIMIZAR */}
         <div onMouseDown={iniciarArrastre} className="modal-header">
           <div className="modal-header-info">
-            <span className="modal-header-icon">📦</span>
+            <span className="modal-header-icon"><Package size={22} /></span>
             <div>
               <h2 className="modal-title">
                 Acta de Ingreso / Recepción de Materiales
@@ -650,14 +823,15 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
               className="btn-header-action"
               title={esMaximizado ? "Restaurar tamaño" : "Maximizar pantalla"}
             >
-              {esMaximizado ? "🗗" : "🗖"}
+              {esMaximizado ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
             </button>
             <button
               type="button"
               onClick={onClose}
               className="btn-close-modal"
+              title="Cerrar"
             >
-              ✕
+              <X size={18} />
             </button>
           </div>
         </div>
@@ -666,7 +840,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
         <div className="modal-toolbar">
           <div>
             <label className="btn-blue">
-              📥 Cargar Excel / CSV
+              <Upload size={16} /> Cargar Excel / CSV
               <input
                 type="file"
                 accept=".xlsx, .xls, .csv"
@@ -683,9 +857,9 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
               className="btn-green"
               onClick={() => setMostrarOpcionesExportarArriba(!mostrarOpcionesExportarArriba)}
             >
-              <span>💾</span>
+              <Save size={16} />
               <span>Guardar y Exportar</span>
-              <span style={{ fontSize: "10px" }}>▼</span>
+              <ChevronDown size={14} />
             </button>
 
             {mostrarOpcionesExportarArriba && (
@@ -695,7 +869,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
                   className="dropdown-item"
                   onClick={() => handleGuardarYExportar("guardar")}
                 >
-                  <span>💾</span> Solo Guardar
+                  <Save size={15} /> Solo Guardar
                 </button>
                 <div className="dropdown-divider" />
                 <button
@@ -703,14 +877,14 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
                   className="dropdown-item"
                   onClick={() => handleGuardarYExportar("excel")}
                 >
-                  <span>📊</span> Exportar en Excel
+                  <FileSpreadsheet size={15} /> Exportar en Excel
                 </button>
                 <button
                   type="button"
                   className="dropdown-item"
                   onClick={() => handleGuardarYExportar("pdf")}
                 >
-                  <span>📄</span> Exportar en PDF
+                  <FileText size={15} /> Exportar en PDF
                 </button>
               </div>
             )}
@@ -812,6 +986,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
                       <th style={{ textAlign: "center", width: "65px" }}>09. U/M</th>
                       <th style={{ textAlign: "center", width: "120px" }}>10. Cond.</th>
                       <th style={{ textAlign: "center", width: "130px" }}>Destino *</th>
+                      <th style={{ textAlign: "left", minWidth: "160px" }}>Proyecto / Calle (Obra)</th>
                       <th style={{ textAlign: "center", width: "100px" }}>11. Cant. Desp. *</th>
                       <th style={{ textAlign: "center", width: "90px" }}>12. Cant. Dev.</th>
                       <th style={{ textAlign: "left", minWidth: "140px" }}>13. Observaciones *</th>
@@ -825,21 +1000,32 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
                       return (
                         <tr key={idx}>
                           <td>
-                            <select
-                              value={mat.material}
-                              onChange={(e) => handleChangeDetalle(idx, "material", e.target.value)}
-                              onBlur={(e) => validarCampoDetalle(idx, "material", e.target.value)}
-                              className={`form-control ${errDetalle.material ? "is-invalid" : ""}`}
-                            >
-                              <option value="">
-                                Seleccione...
-                              </option>
-                              {materialList.map((m) => (
-                                <option key={m.codigo} value={m.codigo}>
-                                  {m.codigo} - {m.descripcion || m.nombre}
+                            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                              <select
+                                value={mat.material}
+                                onChange={(e) => handleChangeDetalle(idx, "material", e.target.value)}
+                                onBlur={(e) => validarCampoDetalle(idx, "material", e.target.value)}
+                                className={`form-control ${errDetalle.material ? "is-invalid" : ""}`}
+                              >
+                                <option value="">
+                                  Seleccione...
                                 </option>
-                              ))}
-                            </select>
+                                {materialList.map((m) => (
+                                  <option key={m.codigo} value={m.codigo}>
+                                    {m.codigo} - {m.descripcion || m.nombre}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => abrirModalNuevoMaterial(idx)}
+                                className="btn-blue"
+                                style={{ padding: "3px 6px", fontSize: "11px", alignSelf: "flex-start" }}
+                                title="Crear un material nuevo sin cerrar el acta"
+                              >
+                                <Plus size={12} /> Nuevo material
+                              </button>
+                            </div>
                             {errDetalle.material && <span className="error-msg">{errDetalle.material}</span>}
                           </td>
                           <td>
@@ -882,6 +1068,19 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
                               <option value="M">M - Mantenimiento</option>
                               <option value="O">O - Obra</option>
                             </select>
+                            {errDetalle.destino && <span className="error-msg">{errDetalle.destino}</span>}
+                          </td>
+                          <td>
+                            <input
+                              type="text"
+                              value={mat.proyecto || ""}
+                              onChange={(e) => handleChangeDetalle(idx, "proyecto", e.target.value)}
+                              onBlur={(e) => validarCampoDetalle(idx, "proyecto", e.target.value, mat)}
+                              disabled={mat.destino !== "O"}
+                              className={`form-control ${errDetalle.proyecto ? "is-invalid" : ""}`}
+                              placeholder={mat.destino === "O" ? "Proyecto, calle o destino..." : "No aplica (Mantenimiento)"}
+                            />
+                            {errDetalle.proyecto && <span className="error-msg">{errDetalle.proyecto}</span>}
                           </td>
                           <td>
                             <input
@@ -918,7 +1117,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
                             />
                             {errDetalle.observacion && <span className="error-msg">{errDetalle.observacion}</span>}
                           </td>
-                          {/* 🔒 CAMPO PÁG BLOQUEADO / NO EDITABLE */}
+                          {/* CAMPO PÁG BLOQUEADO / NO EDITABLE */}
                           <td>
                             <input
                               type="text"
@@ -935,8 +1134,9 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
                               onClick={() => eliminarFila(idx)}
                               disabled={detalles.length === 1}
                               className="btn-danger-icon"
+                              title="Eliminar renglón"
                             >
-                              ✕
+                              <Trash2 size={16} />
                             </button>
                           </td>
                         </tr>
@@ -1033,7 +1233,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
                   className="btn-green"
                   onClick={() => setMostrarOpcionesExportarAbajo(!mostrarOpcionesExportarAbajo)}
                 >
-                  💾 Guardar y Exportar ▼
+                  <Save size={16} /> Guardar y Exportar <ChevronDown size={14} />
                 </button>
 
                 {mostrarOpcionesExportarAbajo && (
@@ -1043,7 +1243,7 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
                       className="dropdown-item"
                       onClick={() => handleGuardarYExportar("guardar")}
                     >
-                      💾 Solo Guardar
+                      <Save size={15} /> Solo Guardar
                     </button>
                     <div className="dropdown-divider" />
                     <button
@@ -1051,14 +1251,14 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
                       className="dropdown-item"
                       onClick={() => handleGuardarYExportar("excel")}
                     >
-                      📊 Exportar en Excel
+                      <FileSpreadsheet size={15} /> Exportar en Excel
                     </button>
                     <button
                       type="button"
                       className="dropdown-item"
                       onClick={() => handleGuardarYExportar("pdf")}
                     >
-                      📄 Exportar en PDF
+                      <FileText size={15} /> Exportar en PDF
                     </button>
                   </div>
                 )}
@@ -1067,6 +1267,133 @@ export default function ActaDeIngreso({ isOpen, onClose, alGuardarExito }) {
           </form>
         </div>
       </div>
+
+      {modalNuevoMaterial && (
+        <div className="modal-overlay" style={{ zIndex: 1200 }}>
+          <div className="modal-container" style={{ maxWidth: "560px", width: "92%" }}>
+            <div className="modal-header">
+              <div className="modal-header-info">
+                <span className="modal-header-icon"><Package size={20} /></span>
+                <div>
+                  <h3 className="modal-title">Crear Material Rápido</h3>
+                  <span className="modal-subtitle">
+                    Se registrará en el inventario y quedará seleccionado en la fila actual del acta.
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn-close-modal"
+                onClick={() => setModalNuevoMaterial(false)}
+                title="Cerrar"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ padding: "16px" }}>
+              <form onSubmit={manejarCrearMaterialRapido} noValidate>
+                <div className="form-grid">
+                  <div className="form-group">
+                    <label className="form-label">Código SAP <span className="text-danger">*</span></label>
+                    <input
+                      type="text"
+                      maxLength={10}
+                      value={nuevoMaterial.codigo}
+                      onChange={(e) =>
+                        handleNuevoMaterialChange("codigo", e.target.value.replace(/\D/g, "").slice(0, 10))
+                      }
+                      className={`form-control ${errorsNuevoMaterial.codigo ? "is-invalid" : ""}`}
+                      placeholder="Ej. 10049987"
+                    />
+                    {errorsNuevoMaterial.codigo && (
+                      <span className="error-msg">
+                        {Array.isArray(errorsNuevoMaterial.codigo)
+                          ? errorsNuevoMaterial.codigo.join(", ")
+                          : errorsNuevoMaterial.codigo}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Unidad de Medida <span className="text-danger">*</span></label>
+                    <select
+                      value={nuevoMaterial.unidad_medida}
+                      onChange={(e) => handleNuevoMaterialChange("unidad_medida", e.target.value)}
+                      className={`form-control ${errorsNuevoMaterial.unidad_medida ? "is-invalid" : ""}`}
+                    >
+                      {UNIDADES_MEDIDA.map((unidad) => (
+                        <option key={unidad} value={unidad}>{unidad}</option>
+                      ))}
+                    </select>
+                    {errorsNuevoMaterial.unidad_medida && (
+                      <span className="error-msg">
+                        {Array.isArray(errorsNuevoMaterial.unidad_medida)
+                          ? errorsNuevoMaterial.unidad_medida.join(", ")
+                          : errorsNuevoMaterial.unidad_medida}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="form-group span-2">
+                    <label className="form-label">Nombre del Material <span className="text-danger">*</span></label>
+                    <input
+                      type="text"
+                      value={nuevoMaterial.nombre}
+                      onChange={(e) => handleNuevoMaterialChange("nombre", e.target.value)}
+                      className={`form-control ${errorsNuevoMaterial.nombre ? "is-invalid" : ""}`}
+                      placeholder="Nombre corto del material"
+                    />
+                    {errorsNuevoMaterial.nombre && (
+                      <span className="error-msg">
+                        {Array.isArray(errorsNuevoMaterial.nombre)
+                          ? errorsNuevoMaterial.nombre.join(", ")
+                          : errorsNuevoMaterial.nombre}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="form-group span-2">
+                    <label className="form-label">Descripción <span className="text-danger">*</span></label>
+                    <textarea
+                      rows="3"
+                      value={nuevoMaterial.descripcion}
+                      onChange={(e) => handleNuevoMaterialChange("descripcion", e.target.value)}
+                      className={`form-control ${errorsNuevoMaterial.descripcion ? "is-invalid" : ""}`}
+                      placeholder="Descripción técnica del material (mínimo 10 caracteres)..."
+                    />
+                    {errorsNuevoMaterial.descripcion && (
+                      <span className="error-msg">
+                        {Array.isArray(errorsNuevoMaterial.descripcion)
+                          ? errorsNuevoMaterial.descripcion.join(", ")
+                          : errorsNuevoMaterial.descripcion}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {errorsNuevoMaterial.detail && (
+                  <span className="error-msg">{String(errorsNuevoMaterial.detail)}</span>
+                )}
+
+                <div className="modal-footer" style={{ paddingLeft: 0, paddingRight: 0, marginTop: "12px" }}>
+                  <button
+                    type="button"
+                    className="btn-cancel"
+                    onClick={() => setModalNuevoMaterial(false)}
+                    disabled={guardandoNuevoMaterial}
+                  >
+                    Cancelar
+                  </button>
+                  <button type="submit" className="btn-success" disabled={guardandoNuevoMaterial}>
+                    <Save size={15} /> {guardandoNuevoMaterial ? "Guardando..." : "Crear y seleccionar"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

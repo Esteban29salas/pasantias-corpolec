@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { ClipboardList, Maximize2, Minimize2, X, Save, ChevronDown, FileSpreadsheet, FileText, Trash2, Image, Upload } from "lucide-react";
 import "../App.css";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -54,6 +55,12 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
 
   const [materialList, setMaterialList] = useState([]);
   const [personalList, setPersonalList] = useState([]);
+  
+  // Estado para imágenes de soporte
+  const [imagenesSoporte, setImagenesSoporte] = useState({
+    imagen_soporte_1: null,
+    imagen_soporte_2: null,
+  });
 
   // Arrastre del Modal
   const [posicion, setPosicion] = useState({ x: 0, y: 0 });
@@ -91,6 +98,7 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
 
   useEffect(() => {
     if (isOpen) {
+      // Las peticiones fetch se mantienen intactas aquí dentro
       fetch("http://localhost:8000/api/cartas-retiro/")
         .then((res) => res.json())
         .then((data) => {
@@ -186,7 +194,6 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
           nuevosDetalles[index].unidad_medida = matEncontrado.unidad_medida || "UND";
           nuevosDetalles[index].pag = matEncontrado.pag_kardex ? String(matEncontrado.pag_kardex) : "1";
         }
-        // El stock disponible depende del origen seleccionado (Mantenimiento u Obra)
         nuevosDetalles[index].stock_disponible = obtenerStockDisponible(
           matEncontrado,
           nuevosDetalles[index].origen || "M"
@@ -404,36 +411,46 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
     return esValido;
   };
 
+  // --- ENVÍO DE DATOS MEDIANTE FORMDATA PARA ARCHIVOS (IMÁGENES) ---
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validarFormularioCompleto()) return;
 
-    const datosParaEnviar = {
-      codigo_retiro: cabecera.codigo_retiro,
-      fecha: cabecera.fecha,
-      ceco: cabecera.ceco,
-      unidad_tecnica: cabecera.unidad_tecnica,
-      entregado_por: cabecera.entregado_por,
-      retirado_por: cabecera.retirado_por,
-      destino_circuito: cabecera.observaciones_generales,
-      detalles: detalles.map((item) => ({
-        material: item.material,
-        cantidad: parseInt(String(item.cantidad_despachada).replace(",", ".").split(".")[0], 10),
-        unidad_medida: item.unidad_medida,
-        condicion: item.condicion,
-        observacion: item.observacion,
-        pag: item.pag,
-        origen: item.origen || "M",
-      })),
-      usuario_id: user?.id,
-      usuario_nombre: user?.nombreCompleto,
-    };
+    const formData = new FormData();
+    formData.append("codigo_retiro", cabecera.codigo_retiro);
+    formData.append("fecha", cabecera.fecha);
+    formData.append("ceco", cabecera.ceco);
+    formData.append("unidad_tecnica", cabecera.unidad_tecnica);
+    formData.append("entregado_por", cabecera.entregado_por);
+    formData.append("retirado_por", cabecera.retirado_por);
+    formData.append("destino_circuito", cabecera.observaciones_generales);
+    if (user?.id) formData.append("usuario_id", user.id);
+    if (user?.nombreCompleto) formData.append("usuario_nombre", user.nombreCompleto);
+
+    // Mapeo de detalles como JSON string para enviarse en FormData
+    const detallesFormateados = detalles.map((item) => ({
+      material: item.material,
+      cantidad: parseInt(String(item.cantidad_despachada).replace(",", ".").split(".")[0], 10),
+      unidad_medida: item.unidad_medida,
+      condicion: item.condicion,
+      observacion: item.observacion,
+      pag: item.pag,
+      origen: item.origen || "M",
+    }));
+    formData.append("detalles", JSON.stringify(detallesFormateados));
+
+    // Adjuntar imágenes si existen
+    if (imagenesSoporte.imagen_soporte_1) {
+      formData.append("imagen_soporte_1", imagenesSoporte.imagen_soporte_1);
+    }
+    if (imagenesSoporte.imagen_soporte_2) {
+      formData.append("imagen_soporte_2", imagenesSoporte.imagen_soporte_2);
+    }
 
     try {
       const res = await fetch("http://localhost:8000/api/cartas-retiro/", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(datosParaEnviar),
+        body: formData, // Enviar como multipart/form-data
       });
 
       const respuestaTexto = await res.text();
@@ -446,6 +463,11 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
       }
 
       if (res.ok) {
+        window.dispatchEvent(new Event("liberaciones-actualizadas"));
+        
+        // 👈 Limpiar las imágenes aquí al tener éxito
+        setImagenesSoporte({ imagen_soporte_1: null, imagen_soporte_2: null });
+
         if (data?.solicitudes_creadas > 0) {
           alert(
             `Carta de Retiro registrada. El stock de Mantenimiento fue descontado de inmediato y ${data.solicitudes_creadas} solicitud(es) de material de Obra quedaron PENDIENTES de aprobación por el administrador.`
@@ -485,7 +507,7 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
         {/* BARRA SUPERIOR ARRASTRABLE Y CON BOTÓN DE MAXIMIZAR */}
         <div onMouseDown={!esMaximizado ? iniciarArrastre : undefined} className="modal-header">
           <div className="modal-header-info">
-            <span className="modal-header-icon">📋</span>
+            <span className="modal-header-icon"><ClipboardList size={22} /></span>
             <div>
               <h2 className="modal-title">Retiro y Devolución de Materiales (KARDEX RD)</h2>
               <span className="modal-subtitle">
@@ -501,7 +523,7 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
               className="btn-header-action"
               title={esMaximizado ? "Restaurar tamaño" : "Maximizar ventana"}
             >
-              {esMaximizado ? "🗗" : "🗖"}
+              {esMaximizado ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
             </button>
             <button
               type="button"
@@ -509,7 +531,7 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
               className="btn-close-modal"
               title="Cerrar"
             >
-              ✕
+              <X size={18} />
             </button>
           </div>
         </div>
@@ -523,9 +545,9 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
               className="btn-green"
               onClick={() => setMostrarOpcionesExportarArriba(!mostrarOpcionesExportarArriba)}
             >
-              <span>💾</span>
+              <Save size={16} />
               <span>Guardar y Exportar</span>
-              <span style={{ fontSize: "10px" }}>▼</span>
+              <ChevronDown size={14} />
             </button>
 
             {mostrarOpcionesExportarArriba && (
@@ -535,7 +557,7 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
                   className="dropdown-item"
                   onClick={() => handleGuardarYExportar("guardar")}
                 >
-                  <span>💾</span> Solo Guardar
+                  <Save size={15} /> Solo Guardar
                 </button>
                 <div className="dropdown-divider" />
                 <button
@@ -543,14 +565,14 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
                   className="dropdown-item"
                   onClick={() => handleGuardarYExportar("excel")}
                 >
-                  <span>📊</span> Exportar en Excel
+                  <FileSpreadsheet size={15} /> Exportar en Excel
                 </button>
                 <button
                   type="button"
                   className="dropdown-item"
                   onClick={() => handleGuardarYExportar("pdf")}
                 >
-                  <span>📄</span> Exportar en PDF
+                  <FileText size={15} /> Exportar en PDF
                 </button>
               </div>
             )}
@@ -754,7 +776,7 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
                               className="form-input"
                             />
                           </td>
-                          {/* 🔒 CAMPO PÁG BLOQUEADO / NO EDITABLE */}
+                          {/* CAMPO PÁG BLOQUEADO / NO EDITABLE */}
                           <td>
                             <input
                               type="text"
@@ -771,8 +793,9 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
                               onClick={() => eliminarFila(idx)}
                               disabled={detalles.length === 1}
                               className="btn-danger-square"
+                              title="Eliminar renglón"
                             >
-                              ✕
+                              <Trash2 size={16} />
                             </button>
                           </td>
                         </tr>
@@ -780,6 +803,58 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
                     })}
                   </tbody>
                 </table>
+              </div>
+            </div>
+
+            {/* SECCIÓN DE IMÁGENES DE SOPORTE DE LA CARTA DE RETIRO CON ICONO UPLOAD */}
+            <div className="card-container bg-slate-50" style={{ marginBottom: "16px" }}>
+              <h3 className="card-title-sm" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <Image size={18} /> Imágenes de Soporte Documental (Opcional)
+              </h3>
+              <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr", gap: "15px" }}>
+                <div className="form-group">
+                  <label className="form-label" style={{ fontSize: "12px", display: "flex", alignItems: "center", gap: "5px" }}>
+                    <Upload size={14} /> Soporte Fotográfico 1:
+                  </label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="form-input"
+                    onChange={(e) =>
+                      setImagenesSoporte((prev) => ({
+                        ...prev,
+                        imagen_soporte_1: e.target.files[0] || null,
+                      }))
+                    }
+                  />
+                  {imagenesSoporte.imagen_soporte_1 && (
+                    <span style={{ fontSize: "11px", color: "#059669", marginTop: "4px", display: "block" }}>
+                      ✓ {imagenesSoporte.imagen_soporte_1.name}
+                    </span>
+                  )}
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label" style={{ fontSize: "12px", display: "flex", alignItems: "center", gap: "5px" }}>
+                    <Upload size={14} /> Soporte Fotográfico 2:
+                  </label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="form-input"
+                    onChange={(e) =>
+                      setImagenesSoporte((prev) => ({
+                        ...prev,
+                        imagen_soporte_2: e.target.files[0] || null,
+                      }))
+                    }
+                  />
+                  {imagenesSoporte.imagen_soporte_2 && (
+                    <span style={{ fontSize: "11px", color: "#059669", marginTop: "4px", display: "block" }}>
+                      ✓ {imagenesSoporte.imagen_soporte_2.name}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -855,7 +930,7 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
                   className="btn-green"
                   onClick={() => setMostrarOpcionesExportarAbajo(!mostrarOpcionesExportarAbajo)}
                 >
-                  💾 Guardar y Exportar ▼
+                  <Save size={16} /> Guardar y Exportar <ChevronDown size={14} />
                 </button>
 
                 {mostrarOpcionesExportarAbajo && (
@@ -865,7 +940,7 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
                       className="dropdown-item"
                       onClick={() => handleGuardarYExportar("guardar")}
                     >
-                      💾 Solo Guardar
+                      <Save size={15} /> Solo Guardar
                     </button>
                     <div className="dropdown-divider" />
                     <button
@@ -873,14 +948,14 @@ export default function ModalCartaRD({ isOpen, onClose, alGuardarExito, user }) 
                       className="dropdown-item"
                       onClick={() => handleGuardarYExportar("excel")}
                     >
-                      📊 Exportar en Excel
+                      <FileSpreadsheet size={15} /> Exportar en Excel
                     </button>
                     <button
                       type="button"
                       className="dropdown-item"
                       onClick={() => handleGuardarYExportar("pdf")}
                     >
-                      📄 Exportar en PDF
+                      <FileText size={15} /> Exportar en PDF
                     </button>
                   </div>
                 )}

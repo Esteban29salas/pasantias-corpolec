@@ -9,7 +9,51 @@ body, #root, .home-container, .welcome-card {
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
+/* Iconografía corporativa (Lucide) */
+svg.lucide {
+  flex-shrink: 0;
+  vertical-align: -0.125em;
+}
+
+.module-title,
+.card-title,
+.card-title-sm,
+.modal-title,
+.theme-selector label,
+.search-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-success,
+.btn-primary,
+.btn-accent,
+.btn-secondary,
+.btn-cancel,
+.btn-blue,
+.btn-green,
+.btn-orange,
+.btn-danger-sm,
+.btn-danger-icon,
+.btn-danger-square {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.dropdown-item,
+.dropdown-card-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .modal-header-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 18px;
 }
 

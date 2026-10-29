@@ -91,6 +91,13 @@ class Material(models.Model):
         default=0.00,
         verbose_name="Stock Obra (Reservado)",
         )
+    proyecto_obra = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        verbose_name="Proyecto / Calle destino del Stock Obra",
+        help_text="Observación o calle asociada al material reservado para obra",
+        )
     pag_kardex = models.IntegerField(
         null=True,
         blank=True,
@@ -139,6 +146,12 @@ class MovimientoKardex(models.Model):
     fecha = models.DateField(default=timezone.now)
     tipo_movimiento = models.CharField(max_length=15, choices=TIPO_CHOICES)
     destino = models.CharField(max_length=1, choices=DESTINO_CHOICES, default='M')
+    proyecto = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text="Proyecto / calle destino cuando el movimiento afecta Stock Obra",
+    )
     
     cantidad_entrada = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
     cantidad_salida = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
@@ -195,6 +208,12 @@ class DetalleActa(models.Model):
         default='M',
         help_text="Destino del material ingresado: Mantenimiento u Obra"
     )
+    proyecto = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text="Proyecto, calle u observación de destino cuando ingresa a Obra",
+    )
 
 class CartaRetiro(models.Model):
     codigo_retiro = models.CharField(max_length=20, unique=True, blank=True)
@@ -204,6 +223,18 @@ class CartaRetiro(models.Model):
     retirado_por = models.ForeignKey(Personal, on_delete=models.PROTECT, related_name='cartas_retiradas')
     destino_circuito = models.CharField(max_length=200)
     observaciones = models.TextField(blank=True, null=True, validators=[validar_observaciones])
+    imagen_soporte_1 = models.ImageField(
+        upload_to='cartas_retiro/%Y/%m/',
+        max_length=255,
+        null=True,
+        blank=True,
+    )
+    imagen_soporte_2 = models.ImageField(
+        upload_to='cartas_retiro/%Y/%m/',
+        max_length=255,
+        null=True,
+        blank=True,
+    )
 
 
     # 'id' se incrementa automáticamente a nivel de Base de Datos sin condiciones de carrera
@@ -280,6 +311,12 @@ class HistorialLiberaciones(models.Model):
     administrador_nombre = models.CharField(max_length=150, blank=True, default='')
     motivo = models.TextField(blank=True, null=True)
     numero_documento = models.CharField(max_length=100, blank=True, default='')
+    imagen_soporte = models.ImageField(
+        upload_to='liberaciones/%Y/%m/',
+        max_length=255,
+        null=True,
+        blank=True,
+    )
     solicitud = models.ForeignKey(
         SolicitudLiberacion, on_delete=models.SET_NULL, related_name='historial',
         null=True, blank=True
@@ -391,6 +428,14 @@ class Usuario(models.Model):
     class Meta:
         db_table = 'usuarios'
         managed = False
+
+    @property
+    def is_authenticated(self):
+        return True
+
+    @property
+    def is_anonymous(self):
+        return False
 
     def __str__(self):
         return f"{self.cedula} - {self.email} - {self.rol}"

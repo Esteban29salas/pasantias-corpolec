@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
+import { Users, UserPlus, Save, ClipboardList, Search } from 'lucide-react';
 
-export default function Personal() {
+export default function Personal({ user }) {
   const [personal, setPersonal] = useState([]);
   const [busqueda, setBusqueda] = useState('');
   const [cargando, setCargando] = useState(true);
   const [nuevo, setNuevo] = useState({ cedula: '', nombre: '', apellido: '', cargo: '' });
   const [errors, setErrors] = useState({});
+  const esAdmin = user?.rol === 'admin';
 
-// Cargar datos al montar el componente
   useEffect(() => {
+    if (!esAdmin) return;
+
     fetch('http://127.0.0.1:8000/api/personal/')
       .then((res) => res.json())
       .then((data) => {
@@ -19,9 +22,8 @@ export default function Personal() {
         console.error('Error al cargar personal:', err);
         setCargando(false);
       });
-  }, []);
+  }, [esAdmin]);
 
-  // Función auxiliar para recargar la lista después de guardar
   const cargarPersonal = () => {
     fetch('http://127.0.0.1:8000/api/personal/')
       .then((res) => res.json())
@@ -31,7 +33,6 @@ export default function Personal() {
       .catch((err) => console.error('Error al recargar personal:', err));
   };
 
-  // Validación de campos del formulario
   const validarCampo = (campo, valor) => {
     let mensaje = "";
     const valLimpio = String(valor).trim();
@@ -110,7 +111,6 @@ export default function Personal() {
     }
   };
 
-  // Filtrado para búsqueda
   const personalFiltrado = personal.filter((p) => {
     const busquedaLower = busqueda.toLowerCase().trim();
     return (
@@ -121,13 +121,26 @@ export default function Personal() {
     );
   });
 
+  if (!esAdmin) {
+    return (
+      <div className="module-container">
+        <div className="card-container" style={{ padding: '24px', textAlign: 'center' }}>
+          <h2 className="module-title">Acceso restringido</h2>
+          <p style={{ color: '#475569' }}>
+            La gestión de personal es exclusiva de usuarios administradores.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="module-container">
       
       {/* ENCABEZADO DE SECCIÓN */}
       <div className="module-header">
         <div>
-          <h2 className="module-title">👥 Gestión de Personal</h2>
+          <h2 className="module-title"><Users size={22} /> Gestión de Personal</h2>
           <span className="module-subtitle">
             Administración de personal técnico y administrativo autorizado
           </span>
@@ -137,7 +150,7 @@ export default function Personal() {
       {/* FORMULARIO DE REGISTRO */}
       <div className="card-container">
         <h3 className="card-title">
-          <span>➕</span> Registrar Nuevo Personal
+          <UserPlus size={18} /> Registrar Nuevo Personal
         </h3>
 
         <form onSubmit={manejarGuardar} noValidate>
@@ -204,7 +217,6 @@ export default function Personal() {
                 <option value="">Seleccione Cargo...</option>
                 <option value="INGENIERO">INGENIERO</option>
                 <option value="LICENCIADO">LICENCIADO</option>
-
                 <option value="ANALISTA">ANALISTA</option>
                 <option value="OPERADOR">OPERADOR</option>
               </select>
@@ -214,7 +226,7 @@ export default function Personal() {
 
           <div className="form-actions">
             <button type="submit" className="btn-primary">
-              💾 Registrar Personal
+              <Save size={16} /> Registrar Personal
             </button>
           </div>
         </form>
@@ -223,10 +235,10 @@ export default function Personal() {
       {/* BARRA DE BÚSQUEDA Y TABLA DE RESULTADOS */}
       <div className="card-container">
         <div className="table-header-tools">
-          <h3 className="card-title-sm">📋 Lista de Personal Registrado</h3>
+          <h3 className="card-title-sm"><ClipboardList size={18} /> Lista de Personal Registrado</h3>
 
           <div className="search-box">
-            <span className="search-icon">🔍</span>
+            <span className="search-icon"><Search size={16} /></span>
             <input
               type="text"
               placeholder="Buscar por cédula, nombre o cargo..."

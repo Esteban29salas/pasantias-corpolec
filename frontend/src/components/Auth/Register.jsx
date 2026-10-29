@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { BadgeCheck, ShieldCheck, User } from 'lucide-react';
 import './Auth.css';
 
 const Register = ({ onSuccess, onSwitchToLogin }) => {
@@ -27,7 +28,6 @@ const Register = ({ onSuccess, onSwitchToLogin }) => {
   const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
   const nameRegex = /^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$/;
   const cedulaRegex = /^[0-9]{6,9}$/;
-  const passwordRegex = /^(?=.*[A-Z])(?=.*[0-9])(?=.*[@#$!]).{8,}$/;
 
   const validateField = (name, value) => {
     switch (name) {
@@ -61,7 +61,7 @@ const Register = ({ onSuccess, onSwitchToLogin }) => {
           return 'Solo números, sin puntos ni letras. Entre 6 y 9 dígitos';
         }
         return '';
-      case 'fechaNacimiento':
+      case 'fechaNacimiento': {
         if (!value) {
           return 'La fecha de nacimiento es requerida';
         }
@@ -79,6 +79,7 @@ const Register = ({ onSuccess, onSwitchToLogin }) => {
           return 'El año no puede ser mayor al año actual';
         }
         return '';
+      }
       case 'cargo':
         if (!value.trim()) {
           return 'El cargo que posee es requerido';
@@ -503,6 +504,7 @@ const Register = ({ onSuccess, onSwitchToLogin }) => {
               className={`admin-toggle ${showAdminSection ? 'active' : ''}`}
               onClick={handleAdminToggle}
             >
+              <ShieldCheck size={16} />
               {showAdminSection ? 'Cancelar registro como Admin' : 'Admin'}
             </button>
 
@@ -527,7 +529,15 @@ const Register = ({ onSuccess, onSwitchToLogin }) => {
                   </span>
                 )}
                 <div className={`role-indicator ${rol}`}>
-                  {rol === 'admin' ? '✓ Se registrará como: Administrador' : '• Se registrará como: Usuario Normal'}
+                  {rol === 'admin' ? (
+                    <>
+                      <BadgeCheck size={16} /> Se registrará como: Administrador
+                    </>
+                  ) : (
+                    <>
+                      <User size={16} /> Se registrará como: Usuario Normal
+                    </>
+                  )}
                 </div>
               </div>
             )}
