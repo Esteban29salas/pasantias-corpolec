@@ -1,5 +1,5 @@
 // frontend/src/services/api.js
-const BASE_URL = 'http://127.0.0.1:8000/api';
+export const API_URL = 'https://pasantias-corpolec.onrender.com/api/';
 
 export const TOKEN_KEY = 'corpoelec_token';
 export const USER_KEY = 'corpoelec_user';
@@ -39,7 +39,7 @@ export function instalarFetchAutenticado() {
 }
 
 export async function obtenerMateriales() {
-  const respuesta = await fetch(`${BASE_URL}/materiales/`);
+  const respuesta = await fetch(`${API_URL}/materiales/`);
   if (!respuesta.ok) throw new Error('Error al obtener los materiales');
   return await respuesta.json();
 }
