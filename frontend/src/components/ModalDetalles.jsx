@@ -3,6 +3,13 @@ import { X } from "lucide-react";
 
 export default function ModalDetalleDocumento({ documento, onClose }) {
   const [datosCompletos, setDatosCompletos] = useState(documento || {});
+  const [archivosSoporte, setArchivosSoporte] = useState({
+    imagen_soporte_1: null,
+    imagen_soporte_2: null,
+  });
+  const [subiendoSoporte, setSubiendoSoporte] = useState(false);
+  const [errorSoporte, setErrorSoporte] = useState("");
+  const [mensajeSoporte, setMensajeSoporte] = useState("");
 
   useEffect(() => {
     if (!documento || !documento.id) return;
@@ -55,6 +62,47 @@ export default function ModalDetalleDocumento({ documento, onClose }) {
   const entregadoTexto = obtenerNombrePersonal(datosCompletos.entregado_por, datosCompletos.entregado_por_nombre);
   const retiradoTexto = obtenerNombrePersonal(datosCompletos.retirado_por, datosCompletos.retirado_por_nombre);
   const devueltoTexto = obtenerNombrePersonal(datosCompletos.devuelto_por, datosCompletos.devuelto_por_nombre);
+
+  const subirSoporte = async () => {
+    const formData = new FormData();
+    let hayArchivos = false;
+
+    ["imagen_soporte_1", "imagen_soporte_2"].forEach((campo) => {
+      if (archivosSoporte[campo]) {
+        formData.append(campo, archivosSoporte[campo]);
+        hayArchivos = true;
+      }
+    });
+
+    if (!hayArchivos) {
+      setErrorSoporte("Seleccione al menos una imagen de soporte.");
+      return;
+    }
+
+    setSubiendoSoporte(true);
+    setErrorSoporte("");
+    setMensajeSoporte("");
+
+    try {
+      const res = await fetch(`http://localhost:8000/api/cartas-retiro/${documento.id}/soporte/`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data.error || data.detail || "No se pudieron subir las imágenes.");
+      }
+
+      setDatosCompletos((prev) => ({ ...prev, ...data }));
+      setArchivosSoporte({ imagen_soporte_1: null, imagen_soporte_2: null });
+      setMensajeSoporte("Imágenes de soporte actualizadas correctamente.");
+    } catch (err) {
+      setErrorSoporte(err.message);
+    } finally {
+      setSubiendoSoporte(false);
+    }
+  };
 
   return (
     <div className="modal-overlay">
@@ -148,6 +196,91 @@ export default function ModalDetalleDocumento({ documento, onClose }) {
             </tbody>
           </table>
         </div>
+
+        {esRetiro && (
+          <div style={{ marginTop: "15px", padding: "12px", backgroundColor: "#f8fafc", borderRadius: "6px" }}>
+            <h4 style={{ color: "#059669", margin: "0 0 10px 0" }}>Soporte Documental</h4>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "12px" }}>
+              {[
+                ["imagen_soporte_1", "Imagen 1"],
+                ["imagen_soporte_2", "Imagen 2"],
+              ].map(([campo, etiqueta]) => (
+                <div key={campo}>
+                  {datosCompletos[campo] ? (
+                    <a href={datosCompletos[campo]} target="_blank" rel="noreferrer">
+                      <img
+                        src={datosCompletos[campo]}
+                        alt={etiqueta}
+                        style={{
+                          width: "100%",
+                          maxHeight: "140px",
+                          objectFit: "cover",
+                          borderRadius: "6px",
+                          border: "1px solid #cbd5e1",
+                        }}
+                      />
+                    </a>
+                  ) : (
+                    <div
+                      style={{
+                        height: "90px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        border: "1px dashed #cbd5e1",
+                        borderRadius: "6px",
+                        color: "#64748b",
+                        fontSize: "12px",
+                      }}
+                    >
+                      {etiqueta}: sin imagen
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+              <input
+                type="file"
+                accept="image/*"
+                className="form-input"
+                onChange={(e) =>
+                  setArchivosSoporte((prev) => ({
+                    ...prev,
+                    imagen_soporte_1: e.target.files?.[0] || null,
+                  }))
+                }
+              />
+              <input
+                type="file"
+                accept="image/*"
+                className="form-input"
+                onChange={(e) =>
+                  setArchivosSoporte((prev) => ({
+                    ...prev,
+                    imagen_soporte_2: e.target.files?.[0] || null,
+                  }))
+                }
+              />
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "8px" }}>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={subirSoporte}
+                disabled={subiendoSoporte}
+                style={{ padding: "5px 12px", fontSize: "12px" }}
+              >
+                {subiendoSoporte ? "Subiendo..." : "Guardar imágenes"}
+              </button>
+              {errorSoporte && <span style={{ color: "#dc2626", fontSize: "12px" }}>{errorSoporte}</span>}
+              {mensajeSoporte && <span style={{ color: "#059669", fontSize: "12px" }}>{mensajeSoporte}</span>}
+            </div>
+          </div>
+        )}
 
         {/* Botón de Cierre */}
         <div style={{ marginTop: "15px", textAlign: "right" }}>

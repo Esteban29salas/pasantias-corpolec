@@ -330,7 +330,7 @@ class CartaRetiroViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser])
     def soporte(self, request, pk=None):
         carta = self.get_object()
-        campos_actualizados = []
+        archivos_nuevos = {}
 
         for campo in ('imagen_soporte_1', 'imagen_soporte_2'):
             archivo = request.FILES.get(campo)
@@ -341,16 +341,21 @@ class CartaRetiroViewSet(viewsets.ModelViewSet):
                     {'error': f'El archivo {campo} debe ser una imagen.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            setattr(carta, campo, archivo)
-            campos_actualizados.append(campo)
+            archivos_nuevos[campo] = archivo
 
-        if not campos_actualizados:
+        if not archivos_nuevos:
             return Response(
                 {'error': 'Debe adjuntar al menos una imagen de soporte.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        carta.save(update_fields=campos_actualizados)
+        for campo, archivo in archivos_nuevos.items():
+            anterior = getattr(carta, campo)
+            if anterior:
+                anterior.delete(save=False)
+            setattr(carta, campo, archivo)
+
+        carta.save(update_fields=list(archivos_nuevos.keys()))
         return Response(self.get_serializer(carta).data, status=status.HTTP_200_OK)
 
 
